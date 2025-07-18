@@ -132,6 +132,8 @@ class SteamInfoPlugin(Star):
                 continue
             if game_info["last_price"] is None:
                 current_monitor_list[game_id]["last_price"] = price_data["current_price"]
+                current_monitor_list[game_id]["original_price"] = price_data["original_price"] # 补充保存原价和折扣
+                current_monitor_list[game_id]["discount"] = price_data["discount"] # 补充保存原价和折扣
                 # 首次设置价格，直接更新文件，不发送通知
                 async with self.monitor_list_lock:
                     with open(self.json2_path, "w", encoding="utf-8") as f:
@@ -246,7 +248,7 @@ class SteamInfoPlugin(Star):
                 yield event.plain_result(f"已成功将您添加到《{game_name}》的订阅列表。")
             with open(self.json2_path, "w", encoding="utf-8") as f:
                 json.dump(monitor_list, f, ensure_ascii=False, indent=4) # 写入时加入 indent 和 ensure_ascii=False 提高可读性
-                await self.monitor_prices() # 立即重新检查一次价格
+        await self.run_monitor_prices() # 立即重新检查一次价格
     @filter.command("delsteamrmd",alias={'steam取消订阅', 'steam取消订阅游戏','steam删除订阅'})
     async def steamrmdremove_command(self, event: AstrMessageEvent):
         """删除游戏监控，不再提醒"""
@@ -308,15 +310,16 @@ class SteamInfoPlugin(Star):
         if not user_monitored_games:
             yield event.plain_result("暂无已订阅游戏。")
             return
-        
+        count = 0
         message_parts = [Comp.Plain(text="您已订阅的游戏列表：\n")]
         for game_id, game_info in user_monitored_games.items():
             game_name = game_info.get('name', '未知游戏')
             last_price = game_info.get('last_price', '未初始化')
             original_price = game_info.get('original_price', 'N/A')
             discount = game_info.get('discount', 'N/A')
+            couunt += 1
             
-            message_parts.append(Comp.Plain(text=f"《{game_name}》 (AppID: {game_id})\n"))
+            message_parts.append(Comp.Plain(text=f"{count}.《{game_name}》 (AppID: {game_id})\n"))
             message_parts.append(Comp.Plain(text=f"  - 当前缓存价格：¥{last_price:.2f}" if isinstance(last_price, (int, float)) else f"  - 当前缓存价格：{last_price}\n"))
             message_parts.append(Comp.Plain(text=f"  - 原价：¥{original_price:.2f}" if isinstance(original_price, (int, float)) else f"  - 原价：{original_price}\n"))
             message_parts.append(Comp.Plain(text=f"  - 折扣：{discount}%" if isinstance(discount, (int, float)) else f"  - 折扣：{discount}\n"))
