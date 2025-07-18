@@ -1,16 +1,14 @@
 import requests
 import logging
 import json
-import time
 import asyncio
 from pathlib import Path
-from fuzzywuzzy import process
+from rapidfuzz import process, fuzz
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.core.config.astrbot_config import AstrBotConfig
 import astrbot.api.message_components as Comp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
 
 @register("astrbot_plugin_SteamSaleTracker", "bushikq", "一个监控steam游戏价格变动的astrbot插件", "1.0.0")
 class SteamInfoPlugin(Star):
@@ -20,11 +18,11 @@ class SteamInfoPlugin(Star):
         self.plugin_dir = Path(__file__).resolve().parent
         self.json1_path = self.data_dir / "game_list.json"
         self.json2_path = self.data_dir / "monitor_list.json"
-        if not self.json2_path.exists():
-            with open(self.json2_path, 'w', encoding='utf-8') as f:
-                json.dump({}, f)
         if not self.json1_path.exists():
             with open(self.json1_path, 'w', encoding='utf-8') as f:
+                json.dump({}, f)
+        if not self.json2_path.exists():
+            with open(self.json2_path, 'w', encoding='utf-8') as f:
                 json.dump({}, f)
         self.config = config
         self.enable_log_output = self.config.get("enable_log_output", False)
@@ -74,16 +72,16 @@ class SteamInfoPlugin(Star):
             self.monitor_list = {}  # 初始化为空字典
             self.logger.info("监控列表文件不存在，已创建空列表")
 
-    async def get_appid_by_name(self, user_input, app_dict=None):
-        """模糊匹配游戏名到AppID"""
-        # 确保 app_dict 已加载
-        if not hasattr(self, 'app_dict') or not app_dict:#如果初始化失败
-            await self.get_app_list() # 尝试重新加载
-            if not self.app_dict_all: # 如果还是没有，则返回None
-                return None
-        
-        matched_name, score = process.extractOne(user_input, app_dict.keys())
-        return [self.app_dict_all[matched_name], matched_name] if score >= 70 else None
+    async def get_appid_by_name(self, user_input, target_dict: dict = None):
+        """模糊匹配游戏名到AppID。"""
+        self.logger.info(f"正在模糊匹配游戏名: {user_input}")
+        matched_result = process.extractOne(user_input, target_dict.keys(),scorer=fuzz.token_set_ratio)
+
+        if matched_result and matched_result[1] >= 70: # 假设 70 分是可接受的匹配度
+            matched_name = matched_result[0]
+            return [target_dict[matched_name], matched_name]
+        else:
+            return None
     
     async def get_steam_price(self, appid, region="cn"):
         """获取游戏价格信息"""
@@ -193,9 +191,6 @@ class SteamInfoPlugin(Star):
                     await self.context.send_message(
                         user_id=user_id,
                         message=final_message_for_user,
-                        # 如果需要支持群聊，这里需要根据event.group_id或其他方式获取group_id
-                        # 并在 monitor_list 中保存 group_id
-                        # 例如：group_id=game_info.get('group_id')
                     )
                     await asyncio.sleep(1) # 增加延迟，避免发送过快被风控
             self.logger.info("价格检查任务执行完成")
@@ -213,11 +208,7 @@ class SteamInfoPlugin(Star):
         region = "cn" #暂时只支持国区，之后可能会拓展
         app_name = " ".join(args)
         
-        yield event.plain_result(f"正在搜索 {app_name}，请稍候...")
-        
-        # 暂时修改 app_dict 用于测试，实际应使用真实的Steam API数据
-        # self.app_dict_all = {"The Binding of Isaac": 113200} 
-        
+        yield event.plain_result(f"正在搜索 {app_name}，请稍候...") 
         game_info_list = await self.get_appid_by_name(app_name, self.app_dict_all)
         self.logger.info(f"搜索结果 game_info_list: {game_info_list}")
         
@@ -226,7 +217,7 @@ class SteamInfoPlugin(Star):
             return
         
         game_id, game_name = game_info_list
-        sender_id = event.get_sender_id()
+        sender_id = str(event.get_sender_id())
 
         # 加锁进行文件读写，确保原子性
         async with self.monitor_list_lock:
@@ -253,26 +244,19 @@ class SteamInfoPlugin(Star):
             else:
                 monitor_list[game_id]["user_id"].append(sender_id)
                 yield event.plain_result(f"已成功将您添加到《{game_name}》的订阅列表。")
-            
-            self.logger.info(f"写入 monitor_list 前: {monitor_list}")
             with open(self.json2_path, "w", encoding="utf-8") as f:
                 json.dump(monitor_list, f, ensure_ascii=False, indent=4) # 写入时加入 indent 和 ensure_ascii=False 提高可读性
-    @filter.command("delsteamrmd",alias={'steam取消订阅', 'steam取消订阅游戏'})
+    @filter.command("delsteamrmd",alias={'steam取消订阅', 'steam取消订阅游戏','steam删除订阅'})
     async def steamrmdremove_command(self, event: AstrMessageEvent):
-        """创建游戏监控，若游戏价格变动则提醒"""
+        """删除游戏监控，不再提醒"""
         args = event.message_str.strip().split()[1:]
         if len(args) < 1:
             yield event.plain_result("请输入游戏名，例如：/steam取消订阅 赛博朋克2077")
             return
-        
-        region = "cn" #暂时只支持国区，之后可能会拓展
         app_name = " ".join(args)
         
         yield event.plain_result(f"正在搜索 {app_name}，请稍候...")
-        
-        # 暂时修改 app_dict 用于测试，实际应使用真实的Steam API数据
-        # self.app_dict_all = {"The Binding of Isaac": 113200} 
-        self.app_dict_all = {app["name"]: app["appid"] for app in self.monitor_list}
+        self.app_dict_subscribed = {self.monitor_list[app]["name"]: self.monitor_list[app]["appid"] for app in self.monitor_list}
 
         game_info_list = await self.get_appid_by_name(app_name, self.app_dict_subscribed)
         self.logger.info(f"搜索结果 game_info_list: {game_info_list}")
@@ -282,7 +266,8 @@ class SteamInfoPlugin(Star):
             return
         
         game_id, game_name = game_info_list
-        sender_id = event.get_sender_id()
+        sender_id = str(event.get_sender_id())
+        game_id = str(game_id)
 
         # 加锁进行文件读写，确保原子性
         async with self.monitor_list_lock:
@@ -290,16 +275,20 @@ class SteamInfoPlugin(Star):
                 monitor_list = json.load(f)
             
             self.logger.info(f"读取 monitor_list 后: {monitor_list}")
-            game_id = str(game_id)
+            
             if game_id not in monitor_list or sender_id not in monitor_list[game_id]["user_id"]:
                 yield event.plain_result(f"您尚未订阅《{game_name}》，无需取消订阅。")
             else:
                 monitor_list[game_id]["user_id"].remove(sender_id)
+                if not monitor_list[game_id]["user_id"]:
+                    del monitor_list[game_id]
+                    self.logger.info(f"游戏《{game_name}》已无订阅者，从监控列表中移除。")
                 yield event.plain_result(f"已成功将您从《{game_name}》的订阅列表中移除。")
-                return # 已经订阅，直接返回
             self.logger.info(f"写入 monitor_list 前: {monitor_list}")
             with open(self.json2_path, "w", encoding="utf-8") as f:
                 json.dump(monitor_list, f, ensure_ascii=False, indent=4)
+        self.monitor_list = monitor_list # 更新内存中的监控列表
+        await self.monitor_prices() # 立即重新检查一次价格
 
     @filter.command("steamrmdlist",alias={'steam订阅列表', 'steam订阅游戏列表'})
     async def steamremind_list_command(self, event: AstrMessageEvent):
