@@ -246,6 +246,7 @@ class SteamInfoPlugin(Star):
                 yield event.plain_result(f"已成功将您添加到《{game_name}》的订阅列表。")
             with open(self.json2_path, "w", encoding="utf-8") as f:
                 json.dump(monitor_list, f, ensure_ascii=False, indent=4) # 写入时加入 indent 和 ensure_ascii=False 提高可读性
+                await self.monitor_prices() # 立即重新检查一次价格
     @filter.command("delsteamrmd",alias={'steam取消订阅', 'steam取消订阅游戏','steam删除订阅'})
     async def steamrmdremove_command(self, event: AstrMessageEvent):
         """删除游戏监控，不再提醒"""
@@ -288,7 +289,6 @@ class SteamInfoPlugin(Star):
             with open(self.json2_path, "w", encoding="utf-8") as f:
                 json.dump(monitor_list, f, ensure_ascii=False, indent=4)
         self.monitor_list = monitor_list # 更新内存中的监控列表
-        await self.monitor_prices() # 立即重新检查一次价格
 
     @filter.command("steamrmdlist",alias={'steam订阅列表', 'steam订阅游戏列表'})
     async def steamremind_list_command(self, event: AstrMessageEvent):
