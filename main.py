@@ -317,7 +317,7 @@ class SteamInfoPlugin(Star):
             last_price = game_info.get('last_price', '未初始化')
             original_price = game_info.get('original_price', 'N/A')
             discount = game_info.get('discount', 'N/A')
-            couunt += 1
+            count += 1
             
             message_parts.append(Comp.Plain(text=f"{count}.《{game_name}》 (AppID: {game_id})\n"))
             message_parts.append(Comp.Plain(text=f"  - 当前缓存价格：¥{last_price:.2f}" if isinstance(last_price, (int, float)) else f"  - 当前缓存价格：{last_price}\n"))
