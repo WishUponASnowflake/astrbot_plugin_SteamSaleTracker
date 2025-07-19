@@ -505,3 +505,16 @@ class SteamSaleTrackerPlugin(Star):
             message_parts.append(Comp.Plain(text="\n")) # 每个游戏之间空一行
 
         yield event.chain_result(message_parts)
+
+    @filter.command("steamrmdhelp",alias={'steam订阅帮助'})
+    async def steamremind_help_command(self, event: AstrMessageEvent):
+        """显示帮助信息"""
+        help_message = """
+        订阅游戏：/steam订阅 [游戏名]
+        取消订阅游戏：/steam取消订阅 [游戏名]
+        查看订阅列表：/steam订阅列表
+        手动检查订阅：/steam检查订阅
+        查看全局订阅列表：/steam全局订阅列表 （需管理员权限）
+        显示帮助信息：/steam订阅帮助
+        """
+        yield event.plain_result(help_message)
