@@ -1,10 +1,9 @@
-import re
 import requests
-import logging
 import json
 import asyncio
 from pathlib import Path
 from rapidfuzz import process, fuzz
+from astrbot.api import logger
 from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.core.config.astrbot_config import AstrBotConfig
@@ -29,21 +28,9 @@ class SteamSaleTrackerPlugin(Star):
                 json.dump({}, f)
 
         self.config = config
-        # 从配置中获取是否启用日志输出，默认为 False
-        self.enable_log_output = self.config.get("enable_log_output", False)
         # 从配置中获取价格检查间隔时间，默认为 30 分钟
         self.interval_minutes = self.config.get("interval_minutes", 30)
-        
-        self.logger = logging.getLogger("astrbot_plugin_SteamSaleTracker")
-        # 配置日志处理器，避免重复添加
-        if not self.logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            handler.setFormatter(formatter)
-            self.logger.addHandler(handler)
-        # 根据配置设置日志级别
-        self.logger.setLevel(logging.INFO if self.enable_log_output else logging.ERROR)
-        self.logger.info("正在初始化SteamSaleTracker插件")
+        logger.info("正在初始化SteamSaleTracker插件")
 
         self.scheduler = AsyncIOScheduler()
         # 添加定时任务，每隔 interval_minutes 运行 run_monitor_prices 方法
@@ -62,14 +49,16 @@ class SteamSaleTrackerPlugin(Star):
         """获取Steam全量游戏列表（AppID + 名称），并缓存到 game_list.json"""
         try:
             url = "https://api.steampowered.com/ISteamApps/GetAppList/v2/"
-            res = requests.get(url).json()
+            loop = asyncio.get_event_loop()
+            # 使用 run_in_executor 包装同步请求
+            res = await loop.run_in_executor(None, lambda: requests.get(url).json())
             self.app_dict_all = {app["name"]: app["appid"] for app in res["applist"]["apps"]}
             with open(self.json1_path, "w", encoding="utf-8") as f: 
                 json.dump(self.app_dict_all, f, ensure_ascii=False, indent=4)
-            self.logger.info("Steam游戏列表更新成功")
+            logger.info("Steam游戏列表更新成功")
         except Exception as e:
-            self.logger.error(f"获取游戏列表失败：{e}")
-            self.app_dict_all = {} # 失败时初始化为空字典
+            logger.error(f"获取游戏列表失败：{e}")
+            self.app_dict_all = {}
 
     async def load_user_monitors(self):
         """加载用户监控列表（从 monitor_list.json 文件）"""
@@ -77,10 +66,10 @@ class SteamSaleTrackerPlugin(Star):
             async with self.monitor_list_lock: # 加锁读取，防止文件被其他操作同时修改
                 with open(self.json2_path, "r", encoding="utf-8") as f:
                     self.monitor_list = json.load(f)
-            self.logger.info("监控列表加载成功")
+            logger.info("监控列表加载成功")
         except (FileNotFoundError, json.JSONDecodeError) as e: # 组合异常捕获
             self.monitor_list = {}  # 文件不存在或者文件损坏时初始化为空字典
-            self.logger.info(f"监控列表文件不存在或损坏，已创建空列表: {e}")
+            logger.info(f"监控列表文件不存在或损坏，已创建空列表: {e}")
             with open(self.json2_path, 'w', encoding='utf-8') as f:
                 json.dump({}, f)
 
@@ -93,9 +82,9 @@ class SteamSaleTrackerPlugin(Star):
         Returns:
             list or None: 如果找到匹配项，返回 [AppID, 匹配的游戏名]，否则返回 None。
         """
-        self.logger.info(f"正在模糊匹配游戏名: {user_input}")
+        logger.info(f"正在模糊匹配游戏名: {user_input}")
         if not target_dict:
-            self.logger.warning("target_dict 为空，无法进行模糊匹配。")
+            logger.warning("target_dict 为空，无法进行模糊匹配。")
             return None
         
         matched_result = process.extractOne(user_input, target_dict.keys(), scorer=fuzz.token_set_ratio)
@@ -121,7 +110,7 @@ class SteamSaleTrackerPlugin(Star):
 
             data = res.get(str(appid))
             if not data or not data.get("success"):
-                self.logger.warning(f"获取游戏 {appid} 价格失败或游戏不存在，data: {data}")
+                logger.warning(f"获取游戏 {appid} 价格失败或游戏不存在，data: {data}")
                 return None
             
             game_data = data["data"]
@@ -130,7 +119,7 @@ class SteamSaleTrackerPlugin(Star):
             
             price_info = game_data.get("price_overview")
             if not price_info:
-                self.logger.info(f"游戏 {game_data.get('name', appid)} 没有价格信息 (可能即将发售或未在 {region} 区域上架)。")
+                logger.info(f"游戏 {game_data.get('name', appid)} 没有价格信息 (可能即将发售或未在 {region} 区域上架)。")
                 return None
 
             return {
@@ -141,7 +130,7 @@ class SteamSaleTrackerPlugin(Star):
                 "currency": price_info["currency"]  # 货币类型
             }
         except Exception as e:
-            self.logger.error(f"获取游戏 {appid} 价格时发生异常：{e}")
+            logger.error(f"获取游戏 {appid} 价格时发生异常：{e}")
             return None
 
     def _parse_unified_origin(self, origin: str):
@@ -189,17 +178,17 @@ class SteamSaleTrackerPlugin(Star):
                 with open(self.json2_path, "r", encoding="utf-8") as f:
                     current_monitor_list = json.load(f)
             except (json.JSONDecodeError, FileNotFoundError) as e:
-                self.logger.error(f"监控列表文件解析失败或不存在，已重置为空列表: {e}")
+                logger.error(f"监控列表文件解析失败或不存在，已重置为空列表: {e}")
                 current_monitor_list = {}
 
         games_to_check = list(current_monitor_list.items()) 
 
         for game_id, game_info in games_to_check:
-            self.logger.info(f"正在检查游戏: {game_info['name']} (AppID: {game_id})")
+            logger.info(f"正在检查游戏: {game_info['name']} (AppID: {game_id})")
             price_data = await self.get_steam_price(game_id, game_info.get("region", "cn")) 
             
             if not price_data:
-                self.logger.warning(f"无法获取游戏《{game_info.get('name', game_id)}》的价格信息，跳过此次检查。")
+                logger.warning(f"无法获取游戏《{game_info.get('name', game_id)}》的价格信息，跳过此次检查。")
                 continue
 
             # 首次设置价格，初始化 last_price 等数据
@@ -210,14 +199,14 @@ class SteamSaleTrackerPlugin(Star):
                 async with self.monitor_list_lock:
                     with open(self.json2_path, "w", encoding="utf-8") as f:
                         json.dump(current_monitor_list, f, ensure_ascii=False, indent=4)
-                self.logger.info(f"游戏《{game_info.get('name', game_id)}》首次记录价格：¥{price_data['current_price']:.2f}")
+                logger.info(f"游戏《{game_info.get('name', game_id)}》首次记录价格：¥{price_data['current_price']:.2f}")
                 continue # 首次记录不发送通知
 
             price_change = price_data["current_price"] - game_info["last_price"]
 
             # 如果价格有变动
             if price_change != 0:
-                self.logger.info(f"游戏《{game_info.get('name', game_id)}》价格变动！")
+                logger.info(f"游戏《{game_info.get('name', game_id)}》价格变动！")
                 
                 if price_data["is_free"]:
                     msg_components= [(Comp.Plain(text=f"🎉🎉🎉游戏《{game_info['name']}》已免费！\n"))]
@@ -254,11 +243,11 @@ class SteamSaleTrackerPlugin(Star):
                         # 否则（unified_msg_origin 只有 GroupID），则不 @ 任何人，直接发群消息
                         yield subscriber_origin, at_members, msg_components
             else:
-                self.logger.info(f"游戏《{game_info.get('name', game_id)}》价格未变动")
+                logger.info(f"游戏《{game_info.get('name', game_id)}》价格未变动")
     
     async def run_monitor_prices(self):
         """定时任务的wrapper函数（迭代生成器并发送消息）"""
-        self.logger.info("开始执行价格检查任务")
+        logger.info("开始执行价格检查任务")
         try:
             # 迭代 monitor_prices 生成器，获取所有待发送的消息
             # 接收 unified_msg_origin, at_members, msg_components
@@ -275,13 +264,12 @@ class SteamSaleTrackerPlugin(Star):
                             msg_components.append(Comp.At(qq=member_id))
                     else:
                         # 如果是群聊但没有可 @ 的用户，记录警告
-                        self.logger.warning(f"群组 {unified_msg_origin} 订阅的游戏《{msg_components[0].text.split('《')[1].split('》')[0]}》没有指定@成员或无法解析用户ID，消息将直接发送到群里。")
+                        logger.warning(f"群组 {unified_msg_origin} 订阅的游戏《{msg_components[0].text.split('《')[1].split('》')[0]}》没有指定@成员或无法解析用户ID，消息将直接发送到群里。")
 
-                    self.logger.info(f"正在向会话 {unified_msg_origin} (群聊) 发送价格变动通知。")
+                    logger.info(f"正在向会话 {unified_msg_origin} (群聊) 发送价格变动通知。")
                 elif parsed_origin["message_type"] == "FriendMessage":
                     # 私聊消息，不需要 @ 任何人
-                    self.logger.info(f"正在向会话 {unified_msg_origin} (私聊) 发送价格变动通知。")
-                print(msg_components)
+                    logger.info(f"正在向会话 {unified_msg_origin} (私聊) 发送价格变动通知。")
                 final_message_components = MessageChain(msg_components) 
                 # 使用 unified_msg_origin 发送消息
                 await self.context.send_message(
@@ -289,9 +277,9 @@ class SteamSaleTrackerPlugin(Star):
                     final_message_components,
                 )
                 await asyncio.sleep(1) # 增加1s延迟，避免被风控
-            self.logger.info("价格检查任务执行完成")
+            logger.info("价格检查任务执行完成")
         except Exception as e:
-            self.logger.error(f"价格检查任务失败：{e}")
+            logger.error(f"价格检查任务失败：{e}")
 
     @filter.command("steamrmd", alias={'steam订阅', 'steam订阅游戏'})
     async def steamremind_command(self, event: AstrMessageEvent):
@@ -309,7 +297,7 @@ class SteamSaleTrackerPlugin(Star):
         
         yield event.plain_result(f"正在搜索 {app_name}，请稍候...") 
         game_info_list = await self.get_appid_by_name(app_name, self.app_dict_all)
-        self.logger.info(f"搜索结果 game_info_list: {game_info_list}")
+        logger.info(f"搜索结果 game_info_list: {game_info_list}")
         
         if not game_info_list:
             yield event.plain_result(f"未找到《{app_name}》，请检查拼写或尝试更精确的名称。(目前仅支持英文名称)")
@@ -324,7 +312,7 @@ class SteamSaleTrackerPlugin(Star):
             with open(self.json2_path, "r", encoding="utf-8") as f:
                 monitor_list = json.load(f)
             
-            self.logger.info(f"读取 monitor_list 后: {monitor_list}")
+            logger.info(f"读取 monitor_list 后: {monitor_list}")
             game_id = str(game_id)
             
             if game_id not in monitor_list:
@@ -375,7 +363,7 @@ class SteamSaleTrackerPlugin(Star):
             }
 
         game_info_list = await self.get_appid_by_name(app_name, self.app_dict_subscribed)
-        self.logger.info(f"搜索结果 game_info_list: {game_info_list}")
+        logger.info(f"搜索结果 game_info_list: {game_info_list}")
         
         if not game_info_list:
             yield event.plain_result(f"未找到《{app_name}》在您的订阅列表中，请检查拼写或尝试更精确的名称。")
@@ -389,7 +377,7 @@ class SteamSaleTrackerPlugin(Star):
             with open(self.json2_path, "r", encoding="utf-8") as f:
                 monitor_list = json.load(f)
             
-            self.logger.info(f"读取 monitor_list 后: {monitor_list}")
+            logger.info(f"读取 monitor_list 后: {monitor_list}")
             
             if game_id not in monitor_list:
                 yield event.plain_result(f"《{game_name}》未被订阅，无需取消。")
@@ -400,17 +388,17 @@ class SteamSaleTrackerPlugin(Star):
             if current_unified_origin in monitor_list[game_id]["subscribers"]:
                 monitor_list[game_id]["subscribers"].remove(current_unified_origin)
                 found_and_removed = True
-                self.logger.info(f"会话 {current_unified_origin} 已从《{game_name}》订阅者中移除。")
+                logger.info(f"会话 {current_unified_origin} 已从《{game_name}》订阅者中移除。")
 
             if found_and_removed:
                 if not monitor_list[game_id]["subscribers"]: # 如果一个游戏没有任何订阅者了，则完全移除该游戏
                     del monitor_list[game_id]
-                    self.logger.info(f"游戏《{game_name}》已无任何订阅者，从监控列表中移除。")
+                    logger.info(f"游戏《{game_name}》已无任何订阅者，从监控列表中移除。")
                 yield event.plain_result(f"已成功将您从《{game_name}》的订阅列表中移除。")
             else:
                 yield event.plain_result(f"您尚未订阅《{game_name}》，无需取消订阅。")
             
-            self.logger.info(f"写入 monitor_list 前: {monitor_list}")
+            logger.info(f"写入 monitor_list 前: {monitor_list}")
             with open(self.json2_path, "w", encoding="utf-8") as f:
                 json.dump(monitor_list, f, ensure_ascii=False, indent=4)
         self.monitor_list = monitor_list # 更新内存中的监控列表
@@ -473,7 +461,7 @@ class SteamSaleTrackerPlugin(Star):
                 with open(self.json2_path, "r", encoding="utf-8") as f:
                     monitor_list = json.load(f)
             except (json.JSONDecodeError, FileNotFoundError) as e:
-                self.logger.error(f"监控列表文件解析失败或不存在：{e}")
+                logger.error(f"监控列表文件解析失败或不存在：{e}")
                 yield event.plain_result("获取全局订阅列表失败：监控数据异常或不存在。")
                 return
 
