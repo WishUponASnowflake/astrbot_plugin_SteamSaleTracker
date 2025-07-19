@@ -452,4 +452,5 @@ class SteamSaleTrackerPlugin(Star):
     @filter.command("steamrmdtest",alias={'steam检查订阅', 'steam手动检查订阅'})
     async def steamremind_test_command(self, event: AstrMessageEvent):
         """手动检查已订阅的游戏价格是否变动"""
+        yield event.plain_result("正在手动检查订阅的游戏价格...")
         await self.run_monitor_prices()
