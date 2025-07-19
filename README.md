@@ -36,7 +36,6 @@
 
 您可以在 AstrBot 的配置文件中配置以下项：
 
-- `enable_log_output`: 是否启用详细日志输出（默认：`false`）。设置为 `true` 会在控制台输出更多插件运行信息。
 - `interval_minutes`: 插件检查游戏价格的间隔时间（单位：分钟，默认：`30` 分钟）。
 
 ## 已知问题和 ToDo List
