@@ -269,7 +269,8 @@ class SteamSaleTrackerPlugin(Star):
                 
                 parsed_origin = self._parse_unified_origin(unified_msg_origin)
 
-                final_message_components = list(msg_components) # 复制一份，避免修改原始列表
+                final_message_components = msg_components # 复制一份，避免修改原始列表
+                print(final_message_components)
                 
                 if parsed_origin["message_type"] == "GroupMessage":
                     # 对于群聊消息，添加 @ 成员
