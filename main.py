@@ -288,7 +288,7 @@ class SteamSaleTrackerPlugin(Star):
                 # 使用 unified_msg_origin 发送消息
                 await self.context.send_message(
                     unified_msg_origin, 
-                    message=final_message_components,
+                    final_message_components,
                 )
                 await asyncio.sleep(1) # 增加1s延迟，避免被风控
             self.logger.info("价格检查任务执行完成")
