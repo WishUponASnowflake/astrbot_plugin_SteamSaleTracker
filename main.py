@@ -1,15 +1,15 @@
+import re
 import requests
 import logging
 import json
 import asyncio
 from pathlib import Path
 from rapidfuzz import process, fuzz
-from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.core.config.astrbot_config import AstrBotConfig
 import astrbot.api.message_components as Comp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-import re # 导入正则表达式模块
 
 @register("astrbot_plugin_SteamSaleTracker", "bushikq", "一个监控steam游戏价格变动的astrbot插件", "1.0.0")
 class SteamSaleTrackerPlugin(Star):
@@ -284,7 +284,7 @@ class SteamSaleTrackerPlugin(Star):
                 elif parsed_origin["message_type"] == "FriendMessage":
                     # 私聊消息，不需要 @ 任何人
                     self.logger.info(f"正在向会话 {unified_msg_origin} (私聊) 发送价格变动通知。")
-                
+                final_message_components = MessageChain(final_message_components)
                 # 使用 unified_msg_origin 发送消息
                 await self.context.send_message(
                     unified_msg_origin, 
