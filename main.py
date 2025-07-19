@@ -301,7 +301,7 @@ class SteamSaleTrackerPlugin(Star):
         """
         args = event.message_str.strip().split()[1:]
         if len(args) < 1:
-            yield event.plain_result("请输入游戏名，例如：/steam订阅 赛博朋克2077")
+            yield event.plain_result("请输入游戏名，例如：/steam订阅 Cyberpunk 2077")
             return
         
         region = "cn" 
@@ -312,7 +312,7 @@ class SteamSaleTrackerPlugin(Star):
         self.logger.info(f"搜索结果 game_info_list: {game_info_list}")
         
         if not game_info_list:
-            yield event.plain_result(f"未找到《{app_name}》，请检查拼写或尝试更精确的名称。")
+            yield event.plain_result(f"未找到《{app_name}》，请检查拼写或尝试更精确的名称。(目前仅支持英文名称)")
             return
         
         game_id, game_name = game_info_list
@@ -361,7 +361,7 @@ class SteamSaleTrackerPlugin(Star):
         """删除游戏监控，不再提醒"""
         args = event.message_str.strip().split()[1:]
         if len(args) < 1:
-            yield event.plain_result("请输入游戏名，例如：/steam取消订阅 赛博朋克2077")
+            yield event.plain_result("请输入游戏名，例如：/steam取消订阅 Cyberpunk 2077")
             return
         app_name = " ".join(args)
         
