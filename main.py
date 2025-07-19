@@ -218,14 +218,13 @@ class SteamSaleTrackerPlugin(Star):
             # 如果价格有变动
             if price_change != 0:
                 self.logger.info(f"游戏《{game_info.get('name', game_id)}》价格变动！")
-                msg_components = []
                 
                 if price_data["is_free"]:
-                    msg_components.append(Comp.Plain(text=f"🎉🎉🎉游戏《{game_info['name']}》已免费！\n"))
+                    msg_components= [(Comp.Plain(text=f"🎉🎉🎉游戏《{game_info['name']}》已免费！\n"))]
                 elif price_change > 0:
-                    msg_components.append(Comp.Plain(text=f"⬆️游戏《{game_info['name']}》价格上涨：¥{price_change:.2f}\n"))
+                    msg_components = [Comp.Plain(text=f"⬆️游戏《{game_info['name']}》价格上涨：¥{price_change:.2f}\n")]
                 elif price_change < 0:
-                    msg_components.append(Comp.Plain(text=f"⬇️游戏《{game_info['name']}》价格下跌：¥{-price_change:.2f}\n"))
+                    msg_components = [(Comp.Plain(text=f"⬇️游戏《{game_info['name']}》价格下跌：¥{-price_change:.2f}\n"))]
                 
                 msg_components.append(Comp.Plain(text=f"变动前价格：¥{game_info['last_price']:.2f}，当前价：¥{price_data['current_price']:.2f}，原价：¥{price_data['original_price']:.2f}，对比原价折扣：{price_data['discount']}%\n"))
                 msg_components.append(Comp.Plain(text=f"购买链接：https://store.steampowered.com/app/{game_id}\n"))
@@ -269,14 +268,11 @@ class SteamSaleTrackerPlugin(Star):
                 
                 parsed_origin = self._parse_unified_origin(unified_msg_origin)
 
-                final_message_components = msg_components # 复制一份，避免修改原始列表
-                print(final_message_components)
-                
                 if parsed_origin["message_type"] == "GroupMessage":
                     # 对于群聊消息，添加 @ 成员
                     if at_members:
                         for member_id in at_members:
-                            final_message_components.append(Comp.At(qq=member_id))
+                            msg_components.append(Comp.At(qq=member_id))
                     else:
                         # 如果是群聊但没有可 @ 的用户，记录警告
                         self.logger.warning(f"群组 {unified_msg_origin} 订阅的游戏《{msg_components[0].text.split('《')[1].split('》')[0]}》没有指定@成员或无法解析用户ID，消息将直接发送到群里。")
@@ -285,7 +281,8 @@ class SteamSaleTrackerPlugin(Star):
                 elif parsed_origin["message_type"] == "FriendMessage":
                     # 私聊消息，不需要 @ 任何人
                     self.logger.info(f"正在向会话 {unified_msg_origin} (私聊) 发送价格变动通知。")
-                final_message_components = MessageChain(final_message_components)
+                print(msg_components)
+                final_message_components = MessageChain(msg_components) 
                 # 使用 unified_msg_origin 发送消息
                 await self.context.send_message(
                     unified_msg_origin, 
