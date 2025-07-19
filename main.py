@@ -9,6 +9,7 @@ from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.core.config.astrbot_config import AstrBotConfig
 import astrbot.api.message_components as Comp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import re # 导入正则表达式模块
 
 @register("astrbot_plugin_SteamSaleTracker", "bushikq", "一个监控steam游戏价格变动的astrbot插件", "1.0.0")
 class SteamSaleTrackerPlugin(Star):
@@ -77,9 +78,9 @@ class SteamSaleTrackerPlugin(Star):
                 with open(self.json2_path, "r", encoding="utf-8") as f:
                     self.monitor_list = json.load(f)
             self.logger.info("监控列表加载成功")
-        except FileNotFoundError or json.JSONDecodeError as e:
+        except (FileNotFoundError, json.JSONDecodeError) as e: # 组合异常捕获
             self.monitor_list = {}  # 文件不存在或者文件损坏时初始化为空字典
-            self.logger.info("文件不存在或者文件损坏，已创建空列表:{e}")
+            self.logger.info(f"监控列表文件不存在或损坏，已创建空列表: {e}")
             with open(self.json2_path, 'w', encoding='utf-8') as f:
                 json.dump({}, f)
 
@@ -127,7 +128,6 @@ class SteamSaleTrackerPlugin(Star):
             if game_data.get("is_free"):  # 免费游戏
                 return {"is_free": True, "current_price": 0, "original_price": 0, "discount": 100, "currency": "FREE"}
             
-            # 有些游戏可能没有价格信息（比如即将发售），需要检查
             price_info = game_data.get("price_overview")
             if not price_info:
                 self.logger.info(f"游戏 {game_data.get('name', appid)} 没有价格信息 (可能即将发售或未在 {region} 区域上架)。")
@@ -143,15 +143,44 @@ class SteamSaleTrackerPlugin(Star):
         except Exception as e:
             self.logger.error(f"获取游戏 {appid} 价格时发生异常：{e}")
             return None
+
+    def _parse_unified_origin(self, origin: str):
+        """
+        解析 unified_msg_origin 字符串，提取平台、消息类型、用户ID和群ID。
+        格式示例: aiocqhttp:FriendMessage:UserID
+                  aiocqhttp:GroupMessage:UserID_GroupID (带会话隔离)
+                  aiocqhttp:GroupMessage:GroupID (不带会话隔离)
+        """
+        parts = origin.split(':')
+        platform = parts[0]
+        message_type = parts[1]
+        identifiers = parts[2]
+
+        user_id = None
+        group_id = None
+
+        if message_type == "FriendMessage":
+            user_id = identifiers
+        elif message_type == "GroupMessage":
+            if '_' in identifiers:
+                user_id, group_id = identifiers.split('_')
+            else:
+                group_id = identifiers
+        
+        return {
+            "platform": platform,
+            "message_type": message_type,
+            "user_id": user_id,
+            "group_id": group_id
+        }
     
     async def monitor_prices(self):
         """
         定时检查监控列表中游戏的价格变动。
         如果价格有变动，则 yield 通知信息。
         Yields:
-            tuple: (target_type, target_id, at_members_list, msg_components)
-                   target_type: "user" (私聊) 或 "group" (群聊)
-                   target_id: 接收消息的用户ID或群组ID
+            tuple: (unified_msg_origin, at_members_list, msg_components)
+                   unified_msg_origin: 会话的唯一标识符
                    at_members_list: 需要在群聊中 @ 的用户ID列表 (私聊时为空)
                    msg_components: 消息组件列表
         """
@@ -159,15 +188,15 @@ class SteamSaleTrackerPlugin(Star):
             try:
                 with open(self.json2_path, "r", encoding="utf-8") as f:
                     current_monitor_list = json.load(f)
-            except json.JSONDecodeError or FileNotFoundError as e:
-                self.logger.error(f"监控列表文件解析失败或不尊在，已重置为空列表: {e}")
+            except (json.JSONDecodeError, FileNotFoundError) as e:
+                self.logger.error(f"监控列表文件解析失败或不存在，已重置为空列表: {e}")
                 current_monitor_list = {}
 
         games_to_check = list(current_monitor_list.items()) 
 
         for game_id, game_info in games_to_check:
             self.logger.info(f"正在检查游戏: {game_info['name']} (AppID: {game_id})")
-            price_data = await self.get_steam_price(game_id, game_info.get("region", "cn")) # 允许存储不同区域
+            price_data = await self.get_steam_price(game_id, game_info.get("region", "cn")) 
             
             if not price_data:
                 self.logger.warning(f"无法获取游戏《{game_info.get('name', game_id)}》的价格信息，跳过此次检查。")
@@ -212,14 +241,19 @@ class SteamSaleTrackerPlugin(Star):
                         json.dump(current_monitor_list, f, ensure_ascii=False, indent=4)
                 
                 # 遍历所有订阅者，确定通知目标
-                for subscriber in game_info.get("subscribers", []):
-                    if subscriber["type"] == "user":
-                        # 个人用户，发送私聊
-                        yield "user", subscriber["id"], [], msg_components 
-                    elif subscriber["type"] == "group":
-                        # 群组，发送群聊并 @ 群内订阅该游戏的成员
-                        at_members = subscriber.get("member_ids", []) # 这里存储了群里订阅者的用户ID
-                        yield "group", subscriber["id"], at_members, msg_components
+                for subscriber_origin in game_info.get("subscribers", []):
+                    parsed_origin = self._parse_unified_origin(subscriber_origin)
+                    
+                    if parsed_origin["message_type"] == "FriendMessage":
+                        # 个人用户，直接发送私聊，不需要 @
+                        yield subscriber_origin, [], msg_components 
+                    elif parsed_origin["message_type"] == "GroupMessage":
+                        at_members = []
+                        # 如果 unified_msg_origin 中包含 UserID (即有会话隔离或Go-Cqhttp/Onebot等明确提供发送者ID的情况)
+                        if parsed_origin["user_id"]: # 如果群消息来源带有用户ID，则 @ 该用户
+                            at_members.append(parsed_origin["user_id"])
+                        # 否则（unified_msg_origin 只有 GroupID），则不 @ 任何人，直接发群消息
+                        yield subscriber_origin, at_members, msg_components
             else:
                 self.logger.info(f"游戏《{game_info.get('name', game_id)}》价格未变动")
     
@@ -228,31 +262,34 @@ class SteamSaleTrackerPlugin(Star):
         self.logger.info("开始执行价格检查任务")
         try:
             # 迭代 monitor_prices 生成器，获取所有待发送的消息
-            async for target_type, target_id, at_members, msg_components in self.monitor_prices():
-                if not target_id or not msg_components:
+            # 接收 unified_msg_origin, at_members, msg_components
+            async for unified_msg_origin, at_members, msg_components in self.monitor_prices():
+                if not unified_msg_origin or not msg_components:
                     continue
                 
-                if target_type == "user":
-                    final_message_for_user = msg_components# 私聊消息，不需要 @ 成员
-                    self.logger.info(f"正在向用户 {target_id} 发送价格变动通知。")
-                    await self.context.send_message(
-                        user_id=target_id, 
-                        message=final_message_for_user,
-                    )
-                elif target_type == "group":
-                    final_message_for_group = msg_components
-                    # 为所有需要 @ 的群成员添加 @ 组件
+                parsed_origin = self._parse_unified_origin(unified_msg_origin)
+
+                final_message_components = list(msg_components) # 复制一份，避免修改原始列表
+                
+                if parsed_origin["message_type"] == "GroupMessage":
+                    # 对于群聊消息，添加 @ 成员
                     if at_members:
                         for member_id in at_members:
-                            final_message_for_group.append(Comp.At(qq=member_id))
-                    else: # 如果没有指定 @ 成员，但想让群里的人看到，可以考虑 @ 所有人或直接发送
-                        self.logger.warning(f"群组 {target_id} 订阅的游戏《{final_message_for_group[0].text.split('《')[1].split('》')[0]}》没有指定@成员，消息将直接发送到群里。")
+                            final_message_components.append(Comp.At(qq=member_id))
+                    else:
+                        # 如果是群聊但没有可 @ 的用户，记录警告
+                        self.logger.warning(f"群组 {unified_msg_origin} 订阅的游戏《{msg_components[0].text.split('《')[1].split('》')[0]}》没有指定@成员或无法解析用户ID，消息将直接发送到群里。")
 
-                    self.logger.info(f"正在向群组 {target_id} 发送价格变动通知。")
-                    await self.context.send_message(
-                        group_id=target_id, # 发送给这个群组
-                        message=final_message_for_group,
-                    )
+                    self.logger.info(f"正在向会话 {unified_msg_origin} (群聊) 发送价格变动通知。")
+                elif parsed_origin["message_type"] == "FriendMessage":
+                    # 私聊消息，不需要 @ 任何人
+                    self.logger.info(f"正在向会话 {unified_msg_origin} (私聊) 发送价格变动通知。")
+                
+                # 使用 unified_msg_origin 发送消息
+                await self.context.send_message(
+                    unified_msg_origin, 
+                    message=final_message_components,
+                )
                 await asyncio.sleep(1) # 增加1s延迟，避免被风控
             self.logger.info("价格检查任务执行完成")
         except Exception as e:
@@ -269,7 +306,7 @@ class SteamSaleTrackerPlugin(Star):
             yield event.plain_result("请输入游戏名，例如：/steam订阅 赛博朋克2077")
             return
         
-        region = "cn" # 目前暂时只支持国区，之后可以拓展配置选项
+        region = "cn" 
         app_name = " ".join(args)
         
         yield event.plain_result(f"正在搜索 {app_name}，请稍候...") 
@@ -281,10 +318,10 @@ class SteamSaleTrackerPlugin(Star):
             return
         
         game_id, game_name = game_info_list
-        sender_id = str(event.get_sender_id())
-        group_id = str(event.get_group_id()) if event.get_group_id() else None # 获取群组ID，如果不在群里则为None
-        print(event.unified_msg_origin)
-
+        # 获取当前会话的 unified_msg_origin
+        current_unified_origin = event.unified_msg_origin
+        parsed_current_origin = self._parse_unified_origin(current_unified_origin)
+        
         async with self.monitor_list_lock:
             with open(self.json2_path, "r", encoding="utf-8") as f:
                 monitor_list = json.load(f)
@@ -292,48 +329,34 @@ class SteamSaleTrackerPlugin(Star):
             self.logger.info(f"读取 monitor_list 后: {monitor_list}")
             game_id = str(game_id)
             
-            # 如果游戏不在监控列表中，则先添加游戏的基本信息
             if game_id not in monitor_list:
                 monitor_list[game_id] = {
                     "name": game_name,
                     "appid": game_id,
                     "region": region,
-                    "last_price": None, # 初始为 None，让定时任务去获取并初始化
+                    "last_price": None, 
                     "original_price": None,
                     "discount": None,
-                    "subscribers": [] # 存储订阅者信息，每个元素是 {"type": "user" or "group", "id": "xxx", "member_ids": [...]}
+                    "subscribers": [] # 直接存储 unified_msg_origin 字符串
                 }
             
-            already_subscribed = False
-            for sub_info in monitor_list[game_id]["subscribers"]:
-                if group_id and sub_info["type"] == "group" and sub_info["id"] == group_id:
-                    # 群组已订阅，检查当前用户是否已在群组的订阅成员中
-                    if sender_id in sub_info.get("member_ids", []):
-                        yield event.plain_result(f"您已在本群组中订阅《{game_name}》，无需重复订阅。")
-                        already_subscribed = True
-                        break
-                    else: # 群组已订阅，但当前用户首次在该群组订阅
-                        sub_info.setdefault("member_ids", []).append(sender_id)
-                        yield event.plain_result(f"已成功将您添加到《{game_name}》的群组订阅列表。")
-                        already_subscribed = True # 视为已订阅，但更新了成员列表
-                        break
-                elif not group_id and sub_info["type"] == "user" and sub_info["id"] == sender_id:
-                    # 个人已订阅
-                    already_subscribed = True
-                    yield event.plain_result(f"您已订阅《{game_name}》，无需重复订阅。")
-                    break
-            if not already_subscribed: # 全新订阅
-                if group_id: # 群组订阅
-                    monitor_list[game_id]["subscribers"].append({"type": "group", "id": group_id, "member_ids": [sender_id]})
-                    yield event.plain_result(f"已成功在当前群组订阅《{game_name}》，价格变动将在群内通知并 @ 您。")
-                else: # 个人订阅 (私聊)
-                    monitor_list[game_id]["subscribers"].append({"type": "user", "id": sender_id})
-                    yield event.plain_result(f"已成功订阅《{game_name}》，价格变动将私聊通知您。")
+            # 检查是否已订阅该会话
+            if current_unified_origin in monitor_list[game_id]["subscribers"]:
+                yield event.plain_result(f"您已在当前会话订阅《{game_name}》，无需重复订阅。")
+            else: 
+                monitor_list[game_id]["subscribers"].append(current_unified_origin)
+                
+                if parsed_current_origin["message_type"] == "GroupMessage":
+                    msg = f"已成功在当前群组订阅《{game_name}》，价格变动将在群内通知并 @ 您（如果会话隔离开启）。"
+                else: # FriendMessage
+                    msg = f"已成功订阅《{game_name}》，价格变动将私聊通知您。"
+                
+                yield event.plain_result(msg)
             
             with open(self.json2_path, "w", encoding="utf-8") as f:
-                json.dump(monitor_list, f, ensure_ascii=False, indent=4) # 写入时加入 indent 和 ensure_ascii=False 提高可读性
+                json.dump(monitor_list, f, ensure_ascii=False, indent=4) 
         
-        await self.run_monitor_prices() # 订阅或更新后，立即重新检查一次价格。
+        await self.run_monitor_prices() 
 
     @filter.command("delsteamrmd",alias={'steam取消订阅', 'steam取消订阅游戏','steam删除订阅'})
     async def steamrmdremove_command(self, event: AstrMessageEvent):
@@ -361,8 +384,7 @@ class SteamSaleTrackerPlugin(Star):
             return
         
         game_id, game_name = game_info_list
-        sender_id = str(event.get_sender_id())
-        group_id = str(event.get_group_id()) if event.get_group_id() else None
+        current_unified_origin = event.unified_msg_origin
         game_id = str(game_id)
 
         async with self.monitor_list_lock:
@@ -376,30 +398,13 @@ class SteamSaleTrackerPlugin(Star):
                 return
 
             found_and_removed = False
-            updated_subscribers = []
-            
-            # 遍历并更新订阅者列表
-            for sub_info in monitor_list[game_id]["subscribers"]:
-                if group_id and sub_info["type"] == "group" and sub_info["id"] == group_id:
-                    # 尝试从群组的成员列表中移除当前用户
-                    if sender_id in sub_info.get("member_ids", []):
-                        sub_info["member_ids"].remove(sender_id)
-                        self.logger.info(f"用户 {sender_id} 已从群组 {group_id} 的《{game_name}》订阅者中移除。")
-                        found_and_removed = True
-                    
-                    if sub_info.get("member_ids"): # 如果群组仍有订阅成员，则保留该群组订阅条目
-                        updated_subscribers.append(sub_info)
-                    else: # 如果群组已无订阅成员，则移除该群组的订阅条目
-                        self.logger.info(f"群组 {group_id} 已无《{game_name}》订阅者，移除群组订阅条目。")
-                elif not group_id and sub_info["type"] == "user" and sub_info["id"] == sender_id:
-                    # 私聊订阅，直接移除
-                    self.logger.info(f"用户 {sender_id} 的《{game_name}》个人订阅已移除。")
-                    found_and_removed = True
-                else: # 保留其他订阅（无论是其他群组还是其他个人）
-                    updated_subscribers.append(sub_info)
+            # 直接从 subscribers 列表中移除对应的 unified_msg_origin
+            if current_unified_origin in monitor_list[game_id]["subscribers"]:
+                monitor_list[game_id]["subscribers"].remove(current_unified_origin)
+                found_and_removed = True
+                self.logger.info(f"会话 {current_unified_origin} 已从《{game_name}》订阅者中移除。")
 
             if found_and_removed:
-                monitor_list[game_id]["subscribers"] = updated_subscribers
                 if not monitor_list[game_id]["subscribers"]: # 如果一个游戏没有任何订阅者了，则完全移除该游戏
                     del monitor_list[game_id]
                     self.logger.info(f"游戏《{game_name}》已无任何订阅者，从监控列表中移除。")
@@ -415,26 +420,16 @@ class SteamSaleTrackerPlugin(Star):
     @filter.command("steamrmdlist",alias={'steam订阅列表', 'steam订阅游戏列表'})
     async def steamremind_list_command(self, event: AstrMessageEvent):
         """查看当前用户或群组已订阅游戏列表"""
-        sender_id = str(event.get_sender_id()) 
-        group_id = str(event.get_group_id()) if event.get_group_id() else None
+        current_unified_origin = event.unified_msg_origin
         
-        # 加锁读取，确保获取到最新数据
         async with self.monitor_list_lock:
             with open(self.json2_path, "r", encoding="utf-8") as f:
                 monitor_list = json.load(f)
             
         user_or_group_monitored_games = {}
         for game_id, game_info in monitor_list.items():
-            for subscriber in game_info.get("subscribers", []):
-                if group_id and subscriber["type"] == "group" and subscriber["id"] == group_id:
-                    # 如果在群聊中查询，且该群组订阅了此游戏
-                    if sender_id in subscriber.get("member_ids", []):# 只显示该群里当前用户订阅的游戏
-                        user_or_group_monitored_games[game_id] = game_info
-                    break # 找到群组订阅，就显示
-                elif not group_id and subscriber["type"] == "user" and subscriber["id"] == sender_id:
-                    # 如果在私聊中查询，且该用户订阅了此游戏
-                    user_or_group_monitored_games[game_id] = game_info
-                    break # 找到个人订阅，就显示
+            if current_unified_origin in game_info.get("subscribers", []):
+                user_or_group_monitored_games[game_id] = game_info
 
         if not user_or_group_monitored_games:
             yield event.plain_result("暂无已订阅游戏。")
@@ -450,7 +445,6 @@ class SteamSaleTrackerPlugin(Star):
             count += 1
             
             message_parts.append(Comp.Plain(text=f"{count}.《{game_name}》 (AppID: {game_id})\n"))
-            # 格式化价格显示，如果是非数字则显示原始值
             message_parts.append(Comp.Plain(text=f"  - 当前缓存价格：¥{last_price:.2f}\n" if isinstance(last_price, (int, float)) else f"  - 当前缓存价格：{last_price}\n"))
             message_parts.append(Comp.Plain(text=f"  - 原价：¥{original_price:.2f}\n" if isinstance(original_price, (int, float)) else f"  - 原价：{original_price}\n"))
             message_parts.append(Comp.Plain(text=f"  - 折扣：{discount}%\n" if isinstance(discount, (int, float)) else f"  - 折扣：{discount}\n"))
