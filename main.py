@@ -510,6 +510,7 @@ class SteamSaleTrackerPlugin(Star):
     async def steamremind_help_command(self, event: AstrMessageEvent):
         """显示帮助信息"""
         help_message = """
+        Steam订阅插件帮助：
         订阅游戏：/steam订阅 [游戏名]
         取消订阅游戏：/steam取消订阅 [游戏名]
         查看订阅列表：/steam订阅列表
