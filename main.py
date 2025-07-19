@@ -449,8 +449,59 @@ class SteamSaleTrackerPlugin(Star):
             message_parts.append(Comp.Plain(text=f"  - 链接：https://store.steampowered.com/app/{game_id}\n\n"))
             
         yield event.chain_result(message_parts)
-    @filter.command("steamrmdtest",alias={'steam检查订阅', 'steam手动检查订阅'})
+    @filter.command("steamrmdrefresh",alias={'steam检查订阅', 'steam刷新订阅'})
     async def steamremind_test_command(self, event: AstrMessageEvent):
         """手动检查已订阅的游戏价格是否变动"""
         yield event.plain_result("正在手动检查订阅的游戏价格...")
         await self.run_monitor_prices()
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("steamrmdlistall",alias={'steam全局订阅列表'})
+    async def steamremind_list_all_command(self, event: AstrMessageEvent):
+        """
+        供管理员使用，输出Steam全局订阅列表，包括游戏名和所有订阅者。
+        """
+        # 仅允许管理员使用此命令，你需要在这里实现你的管理员判断逻辑
+        # 例如，可以通过 event.get_sender_id() 获取发送者ID，并与一个预设的管理员QQ列表进行比较
+        # 这里只是一个示例，你需要替换为实际的管理员判断逻辑
+        # if str(event.get_sender_id()) not in ["你的管理员QQ号1", "你的管理员QQ号2"]:
+        #     yield event.plain_result("抱歉，此命令仅限管理员使用。")
+        #     return
+
+        async with self.monitor_list_lock:
+            try:
+                with open(self.json2_path, "r", encoding="utf-8") as f:
+                    monitor_list = json.load(f)
+            except (json.JSONDecodeError, FileNotFoundError) as e:
+                self.logger.error(f"监控列表文件解析失败或不存在：{e}")
+                yield event.plain_result("获取全局订阅列表失败：监控数据异常或不存在。")
+                return
+
+        if not monitor_list:
+            yield event.plain_result("目前没有游戏被订阅。")
+            return
+
+        message_parts = [Comp.Plain(text="Steam全局订阅列表：\n\n")]
+        game_count = 0
+        for game_id, game_info in monitor_list.items():
+            game_count += 1
+            game_name = game_info.get('name', '未知游戏')
+            
+            message_parts.append(Comp.Plain(text=f"{game_count}. 游戏名称：《{game_name}》 (AppID: {game_id})\n"))
+            
+            subscribers = game_info.get('subscribers', [])
+            if subscribers:
+                message_parts.append(Comp.Plain(text="   订阅者：\n"))
+                for sub_origin in subscribers:
+                    parsed_origin = self._parse_unified_origin(sub_origin)
+                    if parsed_origin["message_type"] == "FriendMessage":
+                        message_parts.append(Comp.Plain(text=f"     - 私聊用户: {parsed_origin['user_id']}\n"))
+                    elif parsed_origin["message_type"] == "GroupMessage":
+                        group_id_str = f"群组: {parsed_origin['group_id']}" if parsed_origin['group_id'] else "未知群组"
+                        user_id_str = f", 订阅者: {parsed_origin['user_id']}" if parsed_origin['user_id'] else ""
+                        message_parts.append(Comp.Plain(text=f"     - {group_id_str}{user_id_str}\n"))
+            else:
+                message_parts.append(Comp.Plain(text="   无订阅者\n"))
+            message_parts.append(Comp.Plain(text="\n")) # 每个游戏之间空一行
+
+        yield event.chain_result(message_parts)
