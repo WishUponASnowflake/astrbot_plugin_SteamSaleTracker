@@ -10,7 +10,7 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 import astrbot.api.message_components as Comp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-@register("astrbot_plugin_SteamSaleTracker", "bushikq", "一个监控steam游戏价格变动的astrbot插件", "1.0.1")
+@register("astrbot_plugin_SteamSaleTracker", "bushikq", "一个监控steam游戏价格变动的astrbot插件", "1.0.2")
 class SteamSaleTrackerPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
