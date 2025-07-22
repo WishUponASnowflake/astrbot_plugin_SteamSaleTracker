@@ -1,4 +1,4 @@
-import requests
+import aiohttp
 import json
 import asyncio
 from pathlib import Path
@@ -61,9 +61,9 @@ class SteamSaleTrackerPlugin(Star):
         """获取Steam全量游戏列表（AppID + 名称），并缓存到 game_list.json"""
         try:
             url = "https://api.steampowered.com/ISteamApps/GetAppList/v2/"
-            loop = asyncio.get_event_loop()
-            # 使用 run_in_executor 包装同步请求
-            res = await loop.run_in_executor(None, lambda: requests.get(url).json())
+            async with aiohttp.ClientSession() as session:  # 使用 aiohttp 替代 requests
+                async with session.get(url) as response:
+                    res = await response.json()
             self.app_dict_all = {
                 app["name"]: app["appid"] for app in res["applist"]["apps"]
             }
@@ -121,8 +121,9 @@ class SteamSaleTrackerPlugin(Star):
         """
         try:
             url = f"https://store.steampowered.com/api/appdetails?appids={appid}&cc={region}&l=zh-cn"
-            loop = asyncio.get_event_loop()
-            res = await loop.run_in_executor(None, lambda: requests.get(url).json())
+            async with aiohttp.ClientSession() as session:  # 使用 aiohttp 替代 requests
+                async with session.get(url) as response:
+                    res = await response.json()
 
             data = res.get(str(appid))
             if not data or not data.get("success"):
