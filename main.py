@@ -10,21 +10,31 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 import astrbot.api.message_components as Comp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-@register("astrbot_plugin_SteamSaleTracker", "bushikq", "一个监控steam游戏价格变动的astrbot插件", "1.0.2")
+
+@register(
+    "astrbot_plugin_SteamSaleTracker",
+    "bushikq",
+    "一个监控steam游戏价格变动的astrbot插件",
+    "1.0.2",
+)
 class SteamSaleTrackerPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.data_dir = Path(StarTools.get_data_dir("astrbot_plugin_SteamSaleTracker"))
         self.plugin_dir = Path(__file__).resolve().parent
-        self.json1_path = self.data_dir / "game_list.json" # 存储所有Steam游戏英文名与id对应的字典
-        self.json2_path = self.data_dir / "monitor_list.json" # 存储用户或群组的监控列表
+        self.json1_path = (
+            self.data_dir / "game_list.json"
+        )  # 存储所有Steam游戏英文名与id对应的字典
+        self.json2_path = (
+            self.data_dir / "monitor_list.json"
+        )  # 存储用户或群组的监控列表
 
         # 确保数据文件存在，如果不存在则创建空文件
         if not self.json1_path.exists():
-            with open(self.json1_path, 'w', encoding='utf-8') as f:
+            with open(self.json1_path, "w", encoding="utf-8") as f:
                 json.dump({}, f)
         if not self.json2_path.exists():
-            with open(self.json2_path, 'w', encoding='utf-8') as f:
+            with open(self.json2_path, "w", encoding="utf-8") as f:
                 json.dump({}, f)
 
         self.config = config
@@ -34,16 +44,18 @@ class SteamSaleTrackerPlugin(Star):
 
         self.scheduler = AsyncIOScheduler()
         # 添加定时任务，每隔 interval_minutes 运行 run_monitor_prices 方法
-        self.scheduler.add_job(self.run_monitor_prices, "interval", minutes=self.interval_minutes)
-        self.scheduler.start() # 启动调度器
+        self.scheduler.add_job(
+            self.run_monitor_prices, "interval", minutes=self.interval_minutes
+        )
+        self.scheduler.start()  # 启动调度器
 
-        self.monitor_list_lock = asyncio.Lock() # 用于保护 monitor_list 文件的读写
-        asyncio.create_task(self.initialize_data()) # 异步初始化数据，避免阻塞主线程
+        self.monitor_list_lock = asyncio.Lock()  # 用于保护 monitor_list 文件的读写
+        asyncio.create_task(self.initialize_data())  # 异步初始化数据，避免阻塞主线程
 
     async def initialize_data(self):
         """异步初始化数据（避免阻塞主线程），获取游戏列表和加载用户监控列表"""
         await self.get_app_list()  # 获取Steam全量游戏列表
-        await self.load_user_monitors() # 加载用户监控列表
+        await self.load_user_monitors()  # 加载用户监控列表
 
     async def get_app_list(self):
         """获取Steam全量游戏列表（AppID + 名称），并缓存到 game_list.json"""
@@ -52,8 +64,10 @@ class SteamSaleTrackerPlugin(Star):
             loop = asyncio.get_event_loop()
             # 使用 run_in_executor 包装同步请求
             res = await loop.run_in_executor(None, lambda: requests.get(url).json())
-            self.app_dict_all = {app["name"]: app["appid"] for app in res["applist"]["apps"]}
-            with open(self.json1_path, "w", encoding="utf-8") as f: 
+            self.app_dict_all = {
+                app["name"]: app["appid"] for app in res["applist"]["apps"]
+            }
+            with open(self.json1_path, "w", encoding="utf-8") as f:
                 json.dump(self.app_dict_all, f, ensure_ascii=False, indent=4)
             logger.info("Steam游戏列表更新成功")
         except Exception as e:
@@ -63,14 +77,14 @@ class SteamSaleTrackerPlugin(Star):
     async def load_user_monitors(self):
         """加载用户监控列表（从 monitor_list.json 文件）"""
         try:
-            async with self.monitor_list_lock: # 加锁读取，防止文件被其他操作同时修改
+            async with self.monitor_list_lock:  # 加锁读取，防止文件被其他操作同时修改
                 with open(self.json2_path, "r", encoding="utf-8") as f:
                     self.monitor_list = json.load(f)
             logger.info("监控列表加载成功")
-        except (FileNotFoundError, json.JSONDecodeError) as e: # 组合异常捕获
+        except (FileNotFoundError, json.JSONDecodeError) as e:  # 组合异常捕获
             self.monitor_list = {}  # 文件不存在或者文件损坏时初始化为空字典
             logger.info(f"监控列表文件不存在或损坏，已创建空列表: {e}")
-            with open(self.json2_path, 'w', encoding='utf-8') as f:
+            with open(self.json2_path, "w", encoding="utf-8") as f:
                 json.dump({}, f)
 
     async def get_appid_by_name(self, user_input, target_dict: dict = None):
@@ -86,14 +100,16 @@ class SteamSaleTrackerPlugin(Star):
         if not target_dict:
             logger.warning("target_dict 为空，无法进行模糊匹配。")
             return None
-        
-        matched_result = process.extractOne(user_input, target_dict.keys(), scorer=fuzz.token_set_ratio)
+
+        matched_result = process.extractOne(
+            user_input, target_dict.keys(), scorer=fuzz.token_set_ratio
+        )
         if matched_result and matched_result[1] >= 70:
             matched_name = matched_result[0]
             return [target_dict[matched_name], matched_name]
         else:
             return None
-    
+
     async def get_steam_price(self, appid, region="cn"):
         """
         获取游戏价格信息。
@@ -112,22 +128,30 @@ class SteamSaleTrackerPlugin(Star):
             if not data or not data.get("success"):
                 logger.warning(f"获取游戏 {appid} 价格失败或游戏不存在，data: {data}")
                 return None
-            
+
             game_data = data["data"]
             if game_data.get("is_free"):  # 免费游戏
-                return {"is_free": True, "current_price": 0, "original_price": 0, "discount": 100, "currency": "FREE"}
-            
+                return {
+                    "is_free": True,
+                    "current_price": 0,
+                    "original_price": 0,
+                    "discount": 100,
+                    "currency": "FREE",
+                }
+
             price_info = game_data.get("price_overview")
             if not price_info:
-                logger.info(f"游戏 {game_data.get('name', appid)} 没有价格信息 (可能即将发售或未在 {region} 区域上架)。")
+                logger.info(
+                    f"游戏 {game_data.get('name', appid)} 没有价格信息 (可能即将发售或未在 {region} 区域上架)。"
+                )
                 return None
 
             return {
                 "is_free": False,
-                "current_price": price_info["final"] / 100, # 单位转换为元
+                "current_price": price_info["final"] / 100,  # 单位转换为元
                 "original_price": price_info["initial"] / 100,
                 "discount": price_info["discount_percent"],
-                "currency": price_info["currency"]  # 货币类型
+                "currency": price_info["currency"],  # 货币类型
             }
         except Exception as e:
             logger.error(f"获取游戏 {appid} 价格时发生异常：{e}")
@@ -140,7 +164,7 @@ class SteamSaleTrackerPlugin(Star):
                   aiocqhttp:GroupMessage:UserID_GroupID (带会话隔离)
                   aiocqhttp:GroupMessage:GroupID (不带会话隔离)
         """
-        parts = origin.split(':')
+        parts = origin.split(":")
         platform = parts[0]
         message_type = parts[1]
         identifiers = parts[2]
@@ -151,18 +175,18 @@ class SteamSaleTrackerPlugin(Star):
         if message_type == "FriendMessage":
             user_id = identifiers
         elif message_type == "GroupMessage":
-            if '_' in identifiers:
-                user_id, group_id = identifiers.split('_')
+            if "_" in identifiers:
+                user_id, group_id = identifiers.split("_")
             else:
                 group_id = identifiers
-        
+
         return {
             "platform": platform,
             "message_type": message_type,
             "user_id": user_id,
-            "group_id": group_id
+            "group_id": group_id,
         }
-    
+
     async def monitor_prices(self):
         """
         定时检查监控列表中游戏的价格变动。
@@ -181,80 +205,124 @@ class SteamSaleTrackerPlugin(Star):
                 logger.error(f"监控列表文件解析失败或不存在，已重置为空列表: {e}")
                 current_monitor_list = {}
 
-        games_to_check = list(current_monitor_list.items()) 
+        games_to_check = list(current_monitor_list.items())
 
         for game_id, game_info in games_to_check:
             logger.info(f"正在检查游戏: {game_info['name']} (AppID: {game_id})")
-            price_data = await self.get_steam_price(game_id, game_info.get("region", "cn")) 
-            
+            price_data = await self.get_steam_price(
+                game_id, game_info.get("region", "cn")
+            )
+
             if not price_data:
-                logger.warning(f"无法获取游戏《{game_info.get('name', game_id)}》的价格信息，跳过此次检查。")
+                logger.warning(
+                    f"无法获取游戏《{game_info.get('name', game_id)}》的价格信息，跳过此次检查。"
+                )
                 continue
 
             # 首次设置价格，初始化 last_price 等数据
             if game_info["last_price"] is None:
-                current_monitor_list[game_id]["last_price"] = price_data["current_price"]
-                current_monitor_list[game_id]["original_price"] = price_data["original_price"]
+                current_monitor_list[game_id]["last_price"] = price_data[
+                    "current_price"
+                ]
+                current_monitor_list[game_id]["original_price"] = price_data[
+                    "original_price"
+                ]
                 current_monitor_list[game_id]["discount"] = price_data["discount"]
                 async with self.monitor_list_lock:
                     with open(self.json2_path, "w", encoding="utf-8") as f:
                         json.dump(current_monitor_list, f, ensure_ascii=False, indent=4)
-                logger.info(f"游戏《{game_info.get('name', game_id)}》首次记录价格：¥{price_data['current_price']:.2f}")
-                continue # 首次记录不发送通知
+                logger.info(
+                    f"游戏《{game_info.get('name', game_id)}》首次记录价格：¥{price_data['current_price']:.2f}"
+                )
+                continue  # 首次记录不发送通知
 
             price_change = price_data["current_price"] - game_info["last_price"]
 
             # 如果价格有变动
             if price_change != 0:
                 logger.info(f"游戏《{game_info.get('name', game_id)}》价格变动！")
-                
+
                 if price_data["is_free"]:
-                    msg_components= [(Comp.Plain(text=f"🎉🎉🎉游戏《{game_info['name']}》已免费！\n"))]
+                    msg_components = [
+                        (
+                            Comp.Plain(
+                                text=f"🎉🎉🎉游戏《{game_info['name']}》已免费！\n"
+                            )
+                        )
+                    ]
                 elif price_change > 0:
-                    msg_components = [Comp.Plain(text=f"⬆️游戏《{game_info['name']}》价格上涨：¥{price_change:.2f}\n")]
+                    msg_components = [
+                        Comp.Plain(
+                            text=f"⬆️游戏《{game_info['name']}》价格上涨：¥{price_change:.2f}\n"
+                        )
+                    ]
                 elif price_change < 0:
-                    msg_components = [(Comp.Plain(text=f"⬇️游戏《{game_info['name']}》价格下跌：¥{-price_change:.2f}\n"))]
-                
-                msg_components.append(Comp.Plain(text=f"变动前价格：¥{game_info['last_price']:.2f}，当前价：¥{price_data['current_price']:.2f}，原价：¥{price_data['original_price']:.2f}，对比原价折扣：{price_data['discount']}%\n"))
-                msg_components.append(Comp.Plain(text=f"购买链接：https://store.steampowered.com/app/{game_id}\n"))
-                
+                    msg_components = [
+                        (
+                            Comp.Plain(
+                                text=f"⬇️游戏《{game_info['name']}》价格下跌：¥{-price_change:.2f}\n"
+                            )
+                        )
+                    ]
+
+                msg_components.append(
+                    Comp.Plain(
+                        text=f"变动前价格：¥{game_info['last_price']:.2f}，当前价：¥{price_data['current_price']:.2f}，原价：¥{price_data['original_price']:.2f}，对比原价折扣：{price_data['discount']}%\n"
+                    )
+                )
+                msg_components.append(
+                    Comp.Plain(
+                        text=f"购买链接：https://store.steampowered.com/app/{game_id}\n"
+                    )
+                )
+
                 # 更新内存中的监控列表
-                current_monitor_list[game_id]["last_price"] = price_data["current_price"]
-                current_monitor_list[game_id]["original_price"] = price_data["original_price"]
+                current_monitor_list[game_id]["last_price"] = price_data[
+                    "current_price"
+                ]
+                current_monitor_list[game_id]["original_price"] = price_data[
+                    "original_price"
+                ]
                 current_monitor_list[game_id]["discount"] = price_data["discount"]
-                
+
                 # 立即将更新后的监控列表写入文件
                 async with self.monitor_list_lock:
                     with open(self.json2_path, "w", encoding="utf-8") as f:
                         json.dump(current_monitor_list, f, ensure_ascii=False, indent=4)
-                
+
                 # 遍历所有订阅者，确定通知目标
                 for subscriber_origin in game_info.get("subscribers", []):
                     parsed_origin = self._parse_unified_origin(subscriber_origin)
-                    
+
                     if parsed_origin["message_type"] == "FriendMessage":
                         # 个人用户，直接发送私聊，不需要 @
-                        yield subscriber_origin, [], msg_components 
+                        yield subscriber_origin, [], msg_components
                     elif parsed_origin["message_type"] == "GroupMessage":
                         at_members = []
                         # 如果 unified_msg_origin 中包含 UserID (即有会话隔离或Go-Cqhttp/Onebot等明确提供发送者ID的情况)
-                        if parsed_origin["user_id"]: # 如果群消息来源带有用户ID，则 @ 该用户
+                        if parsed_origin[
+                            "user_id"
+                        ]:  # 如果群消息来源带有用户ID，则 @ 该用户
                             at_members.append(parsed_origin["user_id"])
                         # 否则（unified_msg_origin 只有 GroupID），则不 @ 任何人，直接发群消息
                         yield subscriber_origin, at_members, msg_components
             else:
                 logger.info(f"游戏《{game_info.get('name', game_id)}》价格未变动")
-    
+
     async def run_monitor_prices(self):
         """定时任务的wrapper函数（迭代生成器并发送消息）"""
         logger.info("开始执行价格检查任务")
         try:
             # 迭代 monitor_prices 生成器，获取所有待发送的消息
             # 接收 unified_msg_origin, at_members, msg_components
-            async for unified_msg_origin, at_members, msg_components in self.monitor_prices():
+            async for (
+                unified_msg_origin,
+                at_members,
+                msg_components,
+            ) in self.monitor_prices():
                 if not unified_msg_origin or not msg_components:
                     continue
-                
+
                 parsed_origin = self._parse_unified_origin(unified_msg_origin)
 
                 if parsed_origin["message_type"] == "GroupMessage":
@@ -264,24 +332,30 @@ class SteamSaleTrackerPlugin(Star):
                             msg_components.append(Comp.At(qq=member_id))
                     else:
                         # 如果是群聊但没有可 @ 的用户，记录警告
-                        logger.warning(f"群组 {unified_msg_origin} 订阅的游戏《{msg_components[0].text.split('《')[1].split('》')[0]}》没有指定@成员或无法解析用户ID，消息将直接发送到群里。")
+                        logger.warning(
+                            f"群组 {unified_msg_origin} 订阅的游戏《{msg_components[0].text.split('《')[1].split('》')[0]}》没有指定@成员或无法解析用户ID，消息将直接发送到群里。"
+                        )
 
-                    logger.info(f"正在向会话 {unified_msg_origin} (群聊) 发送价格变动通知。")
+                    logger.info(
+                        f"正在向会话 {unified_msg_origin} (群聊) 发送价格变动通知。"
+                    )
                 elif parsed_origin["message_type"] == "FriendMessage":
                     # 私聊消息，不需要 @ 任何人
-                    logger.info(f"正在向会话 {unified_msg_origin} (私聊) 发送价格变动通知。")
-                final_message_components = MessageChain(msg_components) 
+                    logger.info(
+                        f"正在向会话 {unified_msg_origin} (私聊) 发送价格变动通知。"
+                    )
+                final_message_components = MessageChain(msg_components)
                 # 使用 unified_msg_origin 发送消息
                 await self.context.send_message(
-                    unified_msg_origin, 
+                    unified_msg_origin,
                     final_message_components,
                 )
-                await asyncio.sleep(1) # 增加1s延迟，避免被风控
+                await asyncio.sleep(1)  # 增加1s延迟，避免被风控
             logger.info("价格检查任务执行完成")
         except Exception as e:
             logger.error(f"价格检查任务失败：{e}")
 
-    @filter.command("steamrmd", alias={'steam订阅', 'steam订阅游戏'})
+    @filter.command("steamrmd", alias={"steam订阅", "steam订阅游戏"})
     async def steamremind_command(self, event: AstrMessageEvent):
         """
         创建游戏监控。
@@ -291,84 +365,98 @@ class SteamSaleTrackerPlugin(Star):
         if len(args) < 1:
             yield event.plain_result("请输入游戏名，例如：/steam订阅 Cyberpunk 2077")
             return
-        
-        region = "cn" 
+
+        region = "cn"
         app_name = " ".join(args)
-        
-        yield event.plain_result(f"正在搜索 {app_name}，请稍候...") 
+
+        yield event.plain_result(f"正在搜索 {app_name}，请稍候...")
         game_info_list = await self.get_appid_by_name(app_name, self.app_dict_all)
         logger.info(f"搜索结果 game_info_list: {game_info_list}")
-        
+
         if not game_info_list:
-            yield event.plain_result(f"未找到《{app_name}》，请检查拼写或尝试更精确的名称。(目前仅支持英文名称)")
+            yield event.plain_result(
+                f"未找到《{app_name}》，请检查拼写或尝试更精确的名称。(目前仅支持英文名称)"
+            )
             return
-        
+
         game_id, game_name = game_info_list
         # 获取当前会话的 unified_msg_origin
         current_unified_origin = event.unified_msg_origin
         parsed_current_origin = self._parse_unified_origin(current_unified_origin)
-        
+
         async with self.monitor_list_lock:
             with open(self.json2_path, "r", encoding="utf-8") as f:
                 monitor_list = json.load(f)
-            
+
             logger.info(f"读取 monitor_list 后: {monitor_list}")
             game_id = str(game_id)
-            
+
             if game_id not in monitor_list:
                 monitor_list[game_id] = {
                     "name": game_name,
                     "appid": game_id,
                     "region": region,
-                    "last_price": None, 
+                    "last_price": None,
                     "original_price": None,
                     "discount": None,
-                    "subscribers": [] # 直接存储 unified_msg_origin 字符串
+                    "subscribers": [],  # 直接存储 unified_msg_origin 字符串
                 }
-            
+
             # 检查是否已订阅该会话
             if current_unified_origin in monitor_list[game_id]["subscribers"]:
-                yield event.plain_result(f"您已在当前会话订阅《{game_name}》，无需重复订阅。")
-            else: 
+                yield event.plain_result(
+                    f"您已在当前会话订阅《{game_name}》，无需重复订阅。"
+                )
+            else:
                 monitor_list[game_id]["subscribers"].append(current_unified_origin)
-                
+
                 if parsed_current_origin["message_type"] == "GroupMessage":
                     msg = f"已成功在当前群组订阅《{game_name}》，价格变动将在群内通知并 @ 您（如果会话隔离开启）。"
-                else: # FriendMessage
+                else:  # FriendMessage
                     msg = f"已成功订阅《{game_name}》，价格变动将私聊通知您。"
-                
-                yield event.plain_result(msg)
-            
-            with open(self.json2_path, "w", encoding="utf-8") as f:
-                json.dump(monitor_list, f, ensure_ascii=False, indent=4) 
-        
-        await self.run_monitor_prices() 
 
-    @filter.command("delsteamrmd",alias={'steam取消订阅', 'steam取消订阅游戏','steam删除订阅'})
+                yield event.plain_result(msg)
+
+            with open(self.json2_path, "w", encoding="utf-8") as f:
+                json.dump(monitor_list, f, ensure_ascii=False, indent=4)
+
+        await self.run_monitor_prices()
+
+    @filter.command(
+        "delsteamrmd", alias={"steam取消订阅", "steam取消订阅游戏", "steam删除订阅"}
+    )
     async def steamrmdremove_command(self, event: AstrMessageEvent):
         """删除游戏监控，不再提醒"""
         args = event.message_str.strip().split()[1:]
         if len(args) < 1:
-            yield event.plain_result("请输入游戏名，例如：/steam取消订阅 Cyberpunk 2077")
+            yield event.plain_result(
+                "请输入游戏名，例如：/steam取消订阅 Cyberpunk 2077"
+            )
             return
         app_name = " ".join(args)
-        
+
         yield event.plain_result(f"正在搜索 {app_name}，请稍候...")
         async with self.monitor_list_lock:
             with open(self.json2_path, "r", encoding="utf-8") as f:
                 current_monitor_list_for_search = json.load(f)
             self.app_dict_subscribed = {
-                current_monitor_list_for_search[app_id]["name"]: current_monitor_list_for_search[app_id]["appid"] 
+                current_monitor_list_for_search[app_id][
+                    "name"
+                ]: current_monitor_list_for_search[app_id]["appid"]
                 for app_id in current_monitor_list_for_search
             }
 
-        game_info_list = await self.get_appid_by_name(app_name, self.app_dict_subscribed)
+        game_info_list = await self.get_appid_by_name(
+            app_name, self.app_dict_subscribed
+        )
         logger.info(f"搜索结果 game_info_list: {game_info_list}")
-        
+
         if not game_info_list:
-            yield event.plain_result(f"未找到《{app_name}》在您的订阅列表中，请检查拼写或尝试更精确的名称。")
+            yield event.plain_result(
+                f"未找到《{app_name}》在您的订阅列表中，请检查拼写或尝试更精确的名称。"
+            )
             return
-        
+
         game_id, game_name = game_info_list
         current_unified_origin = event.unified_msg_origin
         game_id = str(game_id)
@@ -376,9 +464,9 @@ class SteamSaleTrackerPlugin(Star):
         async with self.monitor_list_lock:
             with open(self.json2_path, "r", encoding="utf-8") as f:
                 monitor_list = json.load(f)
-            
+
             logger.info(f"读取 monitor_list 后: {monitor_list}")
-            
+
             if game_id not in monitor_list:
                 yield event.plain_result(f"《{game_name}》未被订阅，无需取消。")
                 return
@@ -388,30 +476,38 @@ class SteamSaleTrackerPlugin(Star):
             if current_unified_origin in monitor_list[game_id]["subscribers"]:
                 monitor_list[game_id]["subscribers"].remove(current_unified_origin)
                 found_and_removed = True
-                logger.info(f"会话 {current_unified_origin} 已从《{game_name}》订阅者中移除。")
+                logger.info(
+                    f"会话 {current_unified_origin} 已从《{game_name}》订阅者中移除。"
+                )
 
             if found_and_removed:
-                if not monitor_list[game_id]["subscribers"]: # 如果一个游戏没有任何订阅者了，则完全移除该游戏
+                if not monitor_list[game_id][
+                    "subscribers"
+                ]:  # 如果一个游戏没有任何订阅者了，则完全移除该游戏
                     del monitor_list[game_id]
-                    logger.info(f"游戏《{game_name}》已无任何订阅者，从监控列表中移除。")
-                yield event.plain_result(f"已成功将您从《{game_name}》的订阅列表中移除。")
+                    logger.info(
+                        f"游戏《{game_name}》已无任何订阅者，从监控列表中移除。"
+                    )
+                yield event.plain_result(
+                    f"已成功将您从《{game_name}》的订阅列表中移除。"
+                )
             else:
                 yield event.plain_result(f"您尚未订阅《{game_name}》，无需取消订阅。")
-            
+
             logger.info(f"写入 monitor_list 前: {monitor_list}")
             with open(self.json2_path, "w", encoding="utf-8") as f:
                 json.dump(monitor_list, f, ensure_ascii=False, indent=4)
-        self.monitor_list = monitor_list # 更新内存中的监控列表
+        self.monitor_list = monitor_list  # 更新内存中的监控列表
 
-    @filter.command("steamrmdlist",alias={'steam订阅列表', 'steam订阅游戏列表'})
+    @filter.command("steamrmdlist", alias={"steam订阅列表", "steam订阅游戏列表"})
     async def steamremind_list_command(self, event: AstrMessageEvent):
         """查看当前用户或群组已订阅游戏列表"""
         current_unified_origin = event.unified_msg_origin
-        
+
         async with self.monitor_list_lock:
             with open(self.json2_path, "r", encoding="utf-8") as f:
                 monitor_list = json.load(f)
-            
+
         user_or_group_monitored_games = {}
         for game_id, game_info in monitor_list.items():
             if current_unified_origin in game_info.get("subscribers", []):
@@ -420,31 +516,56 @@ class SteamSaleTrackerPlugin(Star):
         if not user_or_group_monitored_games:
             yield event.plain_result("暂无已订阅游戏。")
             return
-        
+
         count = 0
         message_parts = [Comp.Plain(text="您已订阅的游戏列表：\n")]
         for game_id, game_info in user_or_group_monitored_games.items():
-            game_name = game_info.get('name', '未知游戏')
-            last_price = game_info.get('last_price', '未初始化')
-            original_price = game_info.get('original_price', 'N/A')
-            discount = game_info.get('discount', 'N/A')
+            game_name = game_info.get("name", "未知游戏")
+            last_price = game_info.get("last_price", "未初始化")
+            original_price = game_info.get("original_price", "N/A")
+            discount = game_info.get("discount", "N/A")
             count += 1
-            
-            message_parts.append(Comp.Plain(text=f"{count}.《{game_name}》 (AppID: {game_id})\n"))
-            message_parts.append(Comp.Plain(text=f"  - 当前缓存价格：¥{last_price:.2f}\n" if isinstance(last_price, (int, float)) else f"  - 当前缓存价格：{last_price}\n"))
-            message_parts.append(Comp.Plain(text=f"  - 原价：¥{original_price:.2f}\n" if isinstance(original_price, (int, float)) else f"  - 原价：{original_price}\n"))
-            message_parts.append(Comp.Plain(text=f"  - 折扣：{discount}%\n" if isinstance(discount, (int, float)) else f"  - 折扣：{discount}\n"))
-            message_parts.append(Comp.Plain(text=f"  - 链接：https://store.steampowered.com/app/{game_id}\n\n"))
-            
+
+            message_parts.append(
+                Comp.Plain(text=f"{count}.《{game_name}》 (AppID: {game_id})\n")
+            )
+            message_parts.append(
+                Comp.Plain(
+                    text=f"  - 当前缓存价格：¥{last_price:.2f}\n"
+                    if isinstance(last_price, (int, float))
+                    else f"  - 当前缓存价格：{last_price}\n"
+                )
+            )
+            message_parts.append(
+                Comp.Plain(
+                    text=f"  - 原价：¥{original_price:.2f}\n"
+                    if isinstance(original_price, (int, float))
+                    else f"  - 原价：{original_price}\n"
+                )
+            )
+            message_parts.append(
+                Comp.Plain(
+                    text=f"  - 折扣：{discount}%\n"
+                    if isinstance(discount, (int, float))
+                    else f"  - 折扣：{discount}\n"
+                )
+            )
+            message_parts.append(
+                Comp.Plain(
+                    text=f"  - 链接：https://store.steampowered.com/app/{game_id}\n\n"
+                )
+            )
+
         yield event.chain_result(message_parts)
-    @filter.command("steamrmdrefresh",alias={'steam检查订阅', 'steam刷新订阅'})
+
+    @filter.command("steamrmdrefresh", alias={"steam检查订阅", "steam刷新订阅"})
     async def steamremind_test_command(self, event: AstrMessageEvent):
         """手动检查已订阅的游戏价格是否变动"""
         yield event.plain_result("正在手动检查订阅的游戏价格...")
         await self.run_monitor_prices()
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("steamrmdlistall",alias={'steam全局订阅列表'})
+    @filter.command("steamrmdlistall", alias={"steam全局订阅列表"})
     async def steamremind_list_all_command(self, event: AstrMessageEvent):
         """
         供管理员使用，输出Steam全局订阅列表，包括游戏名和所有订阅者。
@@ -473,28 +594,46 @@ class SteamSaleTrackerPlugin(Star):
         game_count = 0
         for game_id, game_info in monitor_list.items():
             game_count += 1
-            game_name = game_info.get('name', '未知游戏')
-            
-            message_parts.append(Comp.Plain(text=f"{game_count}. 游戏名称：《{game_name}》 (AppID: {game_id})\n"))
-            
-            subscribers = game_info.get('subscribers', [])
+            game_name = game_info.get("name", "未知游戏")
+
+            message_parts.append(
+                Comp.Plain(
+                    text=f"{game_count}. 游戏名称：《{game_name}》 (AppID: {game_id})\n"
+                )
+            )
+
+            subscribers = game_info.get("subscribers", [])
             if subscribers:
                 message_parts.append(Comp.Plain(text="   订阅者：\n"))
                 for sub_origin in subscribers:
                     parsed_origin = self._parse_unified_origin(sub_origin)
                     if parsed_origin["message_type"] == "FriendMessage":
-                        message_parts.append(Comp.Plain(text=f"     - 私聊用户: {parsed_origin['user_id']}\n"))
+                        message_parts.append(
+                            Comp.Plain(
+                                text=f"     - 私聊用户: {parsed_origin['user_id']}\n"
+                            )
+                        )
                     elif parsed_origin["message_type"] == "GroupMessage":
-                        group_id_str = f"群组: {parsed_origin['group_id']}" if parsed_origin['group_id'] else "未知群组"
-                        user_id_str = f", 订阅者: {parsed_origin['user_id']}" if parsed_origin['user_id'] else ""
-                        message_parts.append(Comp.Plain(text=f"     - {group_id_str}{user_id_str}\n"))
+                        group_id_str = (
+                            f"群组: {parsed_origin['group_id']}"
+                            if parsed_origin["group_id"]
+                            else "未知群组"
+                        )
+                        user_id_str = (
+                            f", 订阅者: {parsed_origin['user_id']}"
+                            if parsed_origin["user_id"]
+                            else ""
+                        )
+                        message_parts.append(
+                            Comp.Plain(text=f"     - {group_id_str}{user_id_str}\n")
+                        )
             else:
                 message_parts.append(Comp.Plain(text="   无订阅者\n"))
-            message_parts.append(Comp.Plain(text="\n")) # 每个游戏之间空一行
+            message_parts.append(Comp.Plain(text="\n"))  # 每个游戏之间空一行
 
         yield event.chain_result(message_parts)
 
-    @filter.command("steamrmdhelp",alias={'steam订阅帮助'})
+    @filter.command("steamrmdhelp", alias={"steam订阅帮助"})
     async def steamremind_help_command(self, event: AstrMessageEvent):
         """显示帮助信息"""
         help_message = """
