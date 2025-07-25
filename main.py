@@ -15,7 +15,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
     "astrbot_plugin_SteamSaleTracker",
     "bushikq",
     "一个监控steam游戏价格变动的astrbot插件",
-    "1.0.2",
+    "1.1.0",
 )
 class SteamSaleTrackerPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -67,6 +67,7 @@ class SteamSaleTrackerPlugin(Star):
             self.app_dict_all = {
                 app["name"]: app["appid"] for app in res["applist"]["apps"]
             }
+            self.app_dict_all_reverse = {v: k for k, v in self.app_dict_all.items()}
             with open(self.json1_path, "w", encoding="utf-8") as f:
                 json.dump(self.app_dict_all, f, ensure_ascii=False, indent=4)
             logger.info("Steam游戏列表更新成功")
@@ -362,21 +363,24 @@ class SteamSaleTrackerPlugin(Star):
         创建游戏监控。
         若游戏价格变动则提醒，群组订阅在群内提醒，个人订阅私聊提醒。
         """
+        region = "cn"
         args = event.message_str.strip().split()[1:]
         if len(args) < 1:
             yield event.plain_result("请输入游戏名，例如：/steam订阅 Cyberpunk 2077")
             return
-
-        region = "cn"
-        app_name = " ".join(args)
-
-        yield event.plain_result(f"正在搜索 {app_name}，请稍候...")
-        game_info_list = await self.get_appid_by_name(app_name, self.app_dict_all)
+        elif len(args) == 1 and str.isdecimal(args[0]):
+            # 输入的是 appid
+            app_id = args[0]
+            game_info_list = [app_id, self.app_dict_all_reverse[int(app_id)]]
+        else:
+            app_name = " ".join(args)
+            yield event.plain_result(f"正在搜索 {app_name}，请稍候...")
+            game_info_list = await self.get_appid_by_name(app_name, self.app_dict_all)
         logger.info(f"搜索结果 game_info_list: {game_info_list}")
 
         if not game_info_list:
             yield event.plain_result(
-                f"未找到《{app_name}》，请检查拼写或尝试更精确的名称。(目前仅支持英文名称)"
+                f"未找到《{app_name}》，请检查拼写或尝试更精确的名称。(目前仅支持英文名称和应用id)"
             )
             return
 
@@ -434,22 +438,25 @@ class SteamSaleTrackerPlugin(Star):
                 "请输入游戏名，例如：/steam取消订阅 Cyberpunk 2077"
             )
             return
-        app_name = " ".join(args)
-
-        yield event.plain_result(f"正在搜索 {app_name}，请稍候...")
-        async with self.monitor_list_lock:
-            with open(self.json2_path, "r", encoding="utf-8") as f:
-                current_monitor_list_for_search = json.load(f)
-            self.app_dict_subscribed = {
-                current_monitor_list_for_search[app_id][
-                    "name"
-                ]: current_monitor_list_for_search[app_id]["appid"]
-                for app_id in current_monitor_list_for_search
-            }
-
-        game_info_list = await self.get_appid_by_name(
-            app_name, self.app_dict_subscribed
-        )
+        elif len(args) == 1 and str.isdecimal(args[0]):
+            # 输入的是 appid
+            app_id = args[0]
+            game_info_list = [app_id, self.app_dict_all_reverse[int(app_id)]]
+        else:
+            app_name = " ".join(args)
+            yield event.plain_result(f"正在搜索 {app_name}，请稍候...")
+            async with self.monitor_list_lock:
+                with open(self.json2_path, "r", encoding="utf-8") as f:
+                    current_monitor_list_for_search = json.load(f)
+                self.app_dict_subscribed = {
+                    current_monitor_list_for_search[app_id][
+                        "name"
+                    ]: current_monitor_list_for_search[app_id]["appid"]
+                    for app_id in current_monitor_list_for_search
+                }
+            game_info_list = await self.get_appid_by_name(
+                app_name, self.app_dict_subscribed
+            )
         logger.info(f"搜索结果 game_info_list: {game_info_list}")
 
         if not game_info_list:
@@ -571,12 +578,6 @@ class SteamSaleTrackerPlugin(Star):
         """
         供管理员使用，输出Steam全局订阅列表，包括游戏名和所有订阅者。
         """
-        # 仅允许管理员使用此命令，你需要在这里实现你的管理员判断逻辑
-        # 例如，可以通过 event.get_sender_id() 获取发送者ID，并与一个预设的管理员QQ列表进行比较
-        # 这里只是一个示例，你需要替换为实际的管理员判断逻辑
-        # if str(event.get_sender_id()) not in ["你的管理员QQ号1", "你的管理员QQ号2"]:
-        #     yield event.plain_result("抱歉，此命令仅限管理员使用。")
-        #     return
 
         async with self.monitor_list_lock:
             try:
