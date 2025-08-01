@@ -15,7 +15,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
     "astrbot_plugin_SteamSaleTracker",
     "bushikq",
     "一个监控steam游戏价格变动的astrbot插件",
-    "1.1.0",
+    "1.1.1",
 )
 class SteamSaleTrackerPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -50,12 +50,14 @@ class SteamSaleTrackerPlugin(Star):
         self.scheduler.start()  # 启动调度器
 
         self.monitor_list_lock = asyncio.Lock()  # 用于保护 monitor_list 文件的读写
+        self.data_initialized = asyncio.Event()  # 添加一个Event来标记数据是否初始化完成
         asyncio.create_task(self.initialize_data())  # 异步初始化数据，避免阻塞主线程
 
     async def initialize_data(self):
         """异步初始化数据（避免阻塞主线程），获取游戏列表和加载用户监控列表"""
         await self.get_app_list()  # 获取Steam全量游戏列表
         await self.load_user_monitors()  # 加载用户监控列表
+        self.data_initialized.set()  # 设置Event，表示数据初始化完成
 
     async def get_app_list(self):
         """获取Steam全量游戏列表（AppID + 名称），并缓存到 game_list.json"""
@@ -73,7 +75,20 @@ class SteamSaleTrackerPlugin(Star):
             logger.info("Steam游戏列表更新成功")
         except Exception as e:
             logger.error(f"获取游戏列表失败：{e}")
-            self.app_dict_all = {}
+            self.app_dict_all = {}  # 确保即使失败也初始化为空字典
+        finally:  # 无论成功失败，都尝试从文件中加载，避免空字典
+            if not self.app_dict_all:  # 如果上面失败了，尝试从本地文件加载
+                try:
+                    with open(self.json1_path, "r", encoding="utf-8") as f:
+                        self.app_dict_all = json.load(f)
+                    self.app_dict_all_reverse = {
+                        v: k for k, v in self.app_dict_all.items()
+                    }
+                    logger.info("从本地文件加载Steam游戏列表成功")
+                except Exception as e:
+                    logger.error(f"从本地文件加载游戏列表失败：{e}")
+                    self.app_dict_all = {}  # 彻底失败则设置为空
+                    self.app_dict_all_reverse = {}
 
     async def load_user_monitors(self):
         """加载用户监控列表（从 monitor_list.json 文件）"""
@@ -98,8 +113,14 @@ class SteamSaleTrackerPlugin(Star):
             list or None: 如果找到匹配项，返回 [AppID, 匹配的游戏名]，否则返回 None。
         """
         logger.info(f"正在模糊匹配游戏名: {user_input}")
-        if not target_dict:
-            logger.warning("target_dict 为空，无法进行模糊匹配。")
+        # 等待数据初始化完成
+        await self.data_initialized.wait()
+        if not target_dict:  # 如果没有传入target_dict，则默认使用app_dict_all
+            target_dict = self.app_dict_all  # 这里就确保了self.app_dict_all是可用的
+        if not target_dict:  # 再次检查，以防初始化失败
+            logger.warning(
+                "target_dict 和 self.app_dict_all 都为空，无法进行模糊匹配。"
+            )
             return None
 
         matched_result = process.extractOne(
@@ -314,6 +335,8 @@ class SteamSaleTrackerPlugin(Star):
     async def run_monitor_prices(self):
         """定时任务的wrapper函数（迭代生成器并发送消息）"""
         logger.info("开始执行价格检查任务")
+        # 等待数据初始化完成
+        await self.data_initialized.wait()
         try:
             # 迭代 monitor_prices 生成器，获取所有待发送的消息
             # 接收 unified_msg_origin, at_members, msg_components
@@ -363,6 +386,12 @@ class SteamSaleTrackerPlugin(Star):
         创建游戏监控。
         若游戏价格变动则提醒，群组订阅在群内提醒，个人订阅私聊提醒。
         """
+        # 在这里等待数据初始化完成
+        await self.data_initialized.wait()
+        if not self.app_dict_all:  # 如果数据初始化失败，app_dict_all为空，直接返回错误
+            yield event.plain_result("游戏列表数据未加载完成或加载失败，请稍后再试。")
+            return
+
         region = "cn"
         args = event.message_str.strip().split()[1:]
         if len(args) < 1:
@@ -371,6 +400,9 @@ class SteamSaleTrackerPlugin(Star):
         elif len(args) == 1 and str.isdecimal(args[0]):
             # 输入的是 appid
             app_id = args[0]
+            if int(app_id) not in self.app_dict_all_reverse:
+                yield event.plain_result(f"未找到 AppID 为 {app_id} 的游戏。")
+                return
             game_info_list = [app_id, self.app_dict_all_reverse[int(app_id)]]
         else:
             app_name = " ".join(args)
@@ -425,6 +457,7 @@ class SteamSaleTrackerPlugin(Star):
             with open(self.json2_path, "w", encoding="utf-8") as f:
                 json.dump(monitor_list, f, ensure_ascii=False, indent=4)
 
+        # 订阅完成后，手动触发一次价格检查，以便尽快获取初始价格或发送首次变动通知
         await self.run_monitor_prices()
 
     @filter.command(
@@ -432,6 +465,12 @@ class SteamSaleTrackerPlugin(Star):
     )
     async def steamrmdremove_command(self, event: AstrMessageEvent):
         """删除游戏监控，不再提醒"""
+        # 在这里等待数据初始化完成
+        await self.data_initialized.wait()
+        if not self.app_dict_all:
+            yield event.plain_result("游戏列表数据未加载完成或加载失败，请稍后再试。")
+            return
+
         args = event.message_str.strip().split()[1:]
         if len(args) < 1:
             yield event.plain_result(
@@ -441,6 +480,9 @@ class SteamSaleTrackerPlugin(Star):
         elif len(args) == 1 and str.isdecimal(args[0]):
             # 输入的是 appid
             app_id = args[0]
+            if int(app_id) not in self.app_dict_all_reverse:
+                yield event.plain_result(f"未找到 AppID 为 {app_id} 的游戏。")
+                return
             game_info_list = [app_id, self.app_dict_all_reverse[int(app_id)]]
         else:
             app_name = " ".join(args)
@@ -510,6 +552,12 @@ class SteamSaleTrackerPlugin(Star):
     @filter.command("steamrmdlist", alias={"steam订阅列表", "steam订阅游戏列表"})
     async def steamremind_list_command(self, event: AstrMessageEvent):
         """查看当前用户或群组已订阅游戏列表"""
+        # 在这里等待数据初始化完成
+        await self.data_initialized.wait()
+        if not self.app_dict_all:
+            yield event.plain_result("游戏列表数据未加载完成或加载失败，请稍后再试。")
+            return
+
         current_unified_origin = event.unified_msg_origin
 
         async with self.monitor_list_lock:
@@ -569,6 +617,12 @@ class SteamSaleTrackerPlugin(Star):
     @filter.command("steamrmdrefresh", alias={"steam检查订阅", "steam刷新订阅"})
     async def steamremind_test_command(self, event: AstrMessageEvent):
         """手动检查已订阅的游戏价格是否变动"""
+        # 在这里等待数据初始化完成
+        await self.data_initialized.wait()
+        if not self.app_dict_all:
+            yield event.plain_result("游戏列表数据未加载完成或加载失败，请稍后再试。")
+            return
+
         yield event.plain_result("正在手动检查订阅的游戏价格...")
         await self.run_monitor_prices()
 
@@ -578,6 +632,11 @@ class SteamSaleTrackerPlugin(Star):
         """
         供管理员使用，输出Steam全局订阅列表，包括游戏名和所有订阅者。
         """
+        # 在这里等待数据初始化完成
+        await self.data_initialized.wait()
+        if not self.app_dict_all:
+            yield event.plain_result("游戏列表数据未加载完成或加载失败，请稍后再试。")
+            return
 
         async with self.monitor_list_lock:
             try:
@@ -640,8 +699,8 @@ class SteamSaleTrackerPlugin(Star):
         """显示帮助信息"""
         help_message = """
         Steam订阅插件帮助：
-        订阅游戏：/steam订阅 [游戏名]
-        取消订阅游戏：/steam取消订阅 [游戏名]
+        订阅游戏：/steam订阅 [游戏名/AppID]
+        取消订阅游戏：/steam取消订阅 [游戏名/AppID]
         查看订阅列表：/steam订阅列表
         手动检查订阅：/steam检查订阅
         查看全局订阅列表：/steam全局订阅列表 （需管理员权限）
