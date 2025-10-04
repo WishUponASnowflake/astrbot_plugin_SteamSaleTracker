@@ -15,7 +15,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
     "astrbot_plugin_SteamSaleTracker",
     "bushikq",
     "一个监控steam游戏价格变动的astrbot插件",
-    "1.1.1",
+    "1.1.2",
 )
 class SteamSaleTrackerPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -707,3 +707,7 @@ class SteamSaleTrackerPlugin(Star):
         显示帮助信息：/steam订阅帮助
         """
         yield event.plain_result(help_message)
+
+    async def terminate(self):
+        if self.scheduler:
+            self.scheduler.shutdown()
